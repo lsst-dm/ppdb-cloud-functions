@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euxo pipefail
+set -uxo pipefail
 
 if [ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
   echo "GOOGLE_APPLICATION_CREDENTIALS is not set. Please set it to your service account key file."
@@ -28,12 +28,12 @@ echo "Bucket: ${GCS_BUCKET}"
 echo "Region: ${REGION}"
 
 # Delete Cloud Function
-gcloud functions delete trigger_stage_chunk --region=${REGION} --quiet || true
+gcloud functions delete trigger_stage_chunk --region=${REGION} --quiet
 
 # Delete Flex Template JSON
-gsutil rm -f gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json || true
+gsutil rm -f gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json
 
 # Delete Container Image (optional)
-gcloud container images delete "gcr.io/${GCP_PROJECT}/stage-chunk-image" --quiet --force-delete-tags || true
+gcloud container images delete "gcr.io/${GCP_PROJECT}/stage-chunk-image" --quiet --force-delete-tags
 
 echo "Teardown complete."
