@@ -66,7 +66,6 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         The dictionary with data specific to this type of event. The `data`
         field contains a base64-encoded string representing a JSON message
         with `bucket` and `name` fields.
-
     context : `google.cloud.functions.Context`
         Metadata of triggering event including `event_id`.
     """
