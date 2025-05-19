@@ -29,7 +29,11 @@ import apache_beam
 from apache_beam import PCollection
 from apache_beam.io.gcp.bigquery import BigQueryDisposition, WriteToBigQuery
 from apache_beam.io.parquetio import ReadFromParquet
-from apache_beam.options.pipeline_options import GoogleCloudOptions, PipelineOptions, SetupOptions
+from apache_beam.options.pipeline_options import (
+    GoogleCloudOptions,
+    PipelineOptions,
+    SetupOptions,
+)
 from google.cloud import storage
 
 logging.basicConfig(level=logging.INFO)
@@ -53,7 +57,9 @@ class BeamSuppressUpdateDestinationSchemaWarning(logging.Filter):
         return True
 
 
-logging.getLogger("apache_beam.transforms.core").addFilter(BeamSuppressUpdateDestinationSchemaWarning())
+logging.getLogger("apache_beam.transforms.core").addFilter(
+    BeamSuppressUpdateDestinationSchemaWarning()
+)
 
 
 class CustomOptions(PipelineOptions):
@@ -70,11 +76,15 @@ class CustomOptions(PipelineOptions):
         """
         parser.add_argument("--dataset_id", required=True, help="BigQuery dataset ID")
         parser.add_argument(
-            "--input_path", required=True, help="GCS path to directory containing Parquet files"
+            "--input_path",
+            required=True,
+            help="GCS path to directory containing Parquet files",
         )
 
 
-def read_parquet(pipeline: apache_beam.Pipeline, input_path: str, name: str) -> PCollection:
+def read_parquet(
+    pipeline: apache_beam.Pipeline, input_path: str, name: str
+) -> PCollection:
     """Read Parquet files from GCS.
 
     Parameters
@@ -95,7 +105,11 @@ def read_parquet(pipeline: apache_beam.Pipeline, input_path: str, name: str) -> 
 
 
 def write_to_bigquery(
-    pcoll: apache_beam.PCollection, project_id: str, dataset_id: str, table_name: str, temp_location: str
+    pcoll: apache_beam.PCollection,
+    project_id: str,
+    dataset_id: str,
+    table_name: str,
+    temp_location: str,
 ) -> PCollection:
     """Write PCollection to BigQuery.
 
@@ -189,10 +203,13 @@ def run(argv: Optional[list[str]] = None) -> None:
     if not temp_location:
         raise ValueError("GCP temp_location must be set in pipeline options.")
 
-    project_id = gcp_options.project
-
     dataset_id = custom_options.dataset_id
     input_path = custom_options.input_path
+
+    if ":" in dataset_id:
+        project_id, dataset_id = dataset_id.split(":", 1)
+    else:
+        project_id = gcp_options.project
 
     try:
         manifest = read_manifest_from_gcs(input_path)

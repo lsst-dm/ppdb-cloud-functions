@@ -50,7 +50,6 @@ PROJECT_ID = require_env("PROJECT_ID")
 DATAFLOW_TEMPLATE_PATH = require_env("DATAFLOW_TEMPLATE_PATH")
 REGION = require_env("REGION")
 SERVICE_ACCOUNT_EMAIL = require_env("SERVICE_ACCOUNT_EMAIL")
-DATASET_ID = require_env("DATASET_ID")
 TEMP_LOCATION = require_env("TEMP_LOCATION")
 
 _credentials, _ = google.auth.default()
@@ -65,7 +64,7 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
     event : `dict`
         The dictionary with data specific to this type of event. The `data`
         field contains a base64-encoded string representing a JSON message
-        with `bucket` and `name` fields.
+        with `bucket`, `name` and `dataset` fields.
     context : `google.cloud.functions.Context`
         Metadata of triggering event including `event_id`.
     """
@@ -84,6 +83,7 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
     try:
         bucket = data["bucket"]
         name = data["name"]
+        dataset_id = data["dataset"]
     except KeyError:
         logging.exception("Missing required key in Pub/Sub message")
         return
@@ -97,7 +97,7 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         "launchParameter": {
             "jobName": job_name,
             "containerSpecGcsPath": DATAFLOW_TEMPLATE_PATH,
-            "parameters": {"input_path": input_path, "dataset_id": DATASET_ID},
+            "parameters": {"input_path": input_path, "dataset_id": dataset_id},
             "environment": {
                 "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
                 "tempLocation": TEMP_LOCATION,
