@@ -19,7 +19,7 @@ fi
 
 echo "Creating Dataflow Flex Template..."
 gcloud dataflow flex-template build "gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json" \
-  --image "gcr.io/${GCP_PROJECT}/stage-chunk-image" \
+  --image "us-central1-docker.pkg.dev/${GCP_PROJECT}/ppdb-docker-repo/stage-chunk-image:latest" \
   --sdk-language "PYTHON" \
   --metadata-file "metadata.json"
 

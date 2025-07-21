@@ -34,6 +34,6 @@ gcloud functions delete trigger_stage_chunk --region=${REGION} --quiet
 gsutil rm -f gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json
 
 # Delete Container Image (optional)
-gcloud container images delete "gcr.io/${GCP_PROJECT}/stage-chunk-image" --quiet --force-delete-tags
+gcloud artifacts docker images delete "us-central1-docker.pkg.dev/${GCP_PROJECT}/ppdb-docker-repo/stage-chunk-image:latest" --quiet
 
 echo "Teardown complete."
