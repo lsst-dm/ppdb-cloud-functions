@@ -12,4 +12,11 @@ if [ -z "${GCP_PROJECT:-}" ]; then
   exit 1
 fi
 
-gcloud builds submit --tag "gcr.io/${GCP_PROJECT}/stage-chunk-image" .
+# Build the Docker image
+gcloud builds submit \
+  --config=cloudbuild.yaml \
+  --region=us-central1 \
+  --service-account="projects/${GCP_PROJECT}/serviceAccounts/${SERVICE_ACCOUNT_EMAIL}"
+
+# Verify the image was built and pushed to Artifact Registry
+gcloud artifacts docker images list us-central1-docker.pkg.dev/${GCP_PROJECT}/ppdb-docker-repo
