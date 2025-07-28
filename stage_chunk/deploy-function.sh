@@ -7,13 +7,13 @@ if [ -z "${GCP_PROJECT:-}" ]; then
   exit 1
 fi
 
-if [ -z "${REGION:-}" ]; then
-  echo "REGION is unset or empty. Please set it to your Google Cloud region."
+if [ -z "${GCS_BUCKET:-}" ]; then
+  echo "GCS_BUCKET is unset or empty. Please set it to your Google Cloud Storage bucket name."
   exit 1
 fi
 
-if [ -z "${DATAFLOW_TEMPLATE_PATH:-}" ]; then
-  echo "DATAFLOW_TEMPLATE_PATH is unset or empty. Please set it to your Dataflow template path."
+if [ -z "${REGION:-}" ]; then
+  echo "REGION is unset or empty. Please set it to your Google Cloud region."
   exit 1
 fi
 
@@ -27,10 +27,9 @@ if [ -z "${DATASET_ID:-}" ]; then
   exit 1
 fi
 
-if [ -z "${TEMP_LOCATION:-}" ]; then
-  echo "TEMP_LOCATION is unset or empty. Please set it to your Google Cloud temporary location."
-  exit 1
-fi
+# Set Dataflow template path and temp location by convention
+DATAFLOW_TEMPLATE_PATH="gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json"
+TEMP_LOCATION="gs://${GCS_BUCKET}/dataflow/temp"
 
 # Deploy the Cloud Function
 gcloud functions deploy trigger_stage_chunk \
