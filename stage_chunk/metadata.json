@@ -15,6 +15,13 @@
         "helpText": "Target BigQuery dataset",
         "paramType": "TEXT",
         "isOptional": false
+      },
+      {
+        "name": "chunk_id",
+        "label": "Chunk ID",
+        "helpText": "ID of the chunk being processed",
+        "paramType": "TEXT",
+        "isOptional": false
       }
     ]
   }

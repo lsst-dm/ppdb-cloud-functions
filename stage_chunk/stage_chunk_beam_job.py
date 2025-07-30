@@ -80,6 +80,11 @@ class CustomOptions(PipelineOptions):
             required=True,
             help="GCS path to directory containing Parquet files",
         )
+        parser.add_argument(
+            "--chunk_id",
+            required=True,
+            help="ID of the chunk being processed",
+        )
 
 
 def read_parquet(
@@ -156,20 +161,22 @@ def parse_input_path(input_path: str) -> tuple[str, str]:
     if parsed_url.scheme != "gs":
         raise ValueError("Input path must start with 'gs://'")
     bucket_name = parsed_url.netloc
-    object_path = parsed_url.path.lstrip("/")  # Remove leading slash from the path
+    object_path = parsed_url.path.lstrip("/").rstrip(
+        "/"
+    )  # Remove leading and trailing slashes from the object path.
     if not bucket_name or not object_path:
         raise ValueError(f"Invalid GCS path: {input_path}")
-    if not object_path.endswith("/"):
-        object_path += "/"
     return bucket_name, object_path
 
 
-def read_manifest_from_gcs(input_path: str) -> dict:
+def read_manifest_from_gcs(chunk_id: int, input_path: str) -> dict:
     """Read the manifest.json file from GCS and return it as a Python
     dictionary.
 
     Parameters
     ----------
+    chunk_id : `int`
+        The ID of the chunk being processed.
     input_path : `str`
         The GCS path to the directory containing the manifest.json file.
 
@@ -184,9 +191,11 @@ def read_manifest_from_gcs(input_path: str) -> dict:
     # Initialize the GCS client
     client = storage.Client()
     bucket = client.bucket(bucket_name)
-    blob = bucket.blob(f"{object_prefix}manifest.json")
+    manifest_path = f"{object_prefix}/chunk_{chunk_id}.manifest.json"
+    logging.info(f"Reading manifest from: gs://{bucket_name}/{manifest_path}")
 
-    # Download and parse the manifest file
+    # Download the manifest file and return its data.
+    blob = bucket.blob(manifest_path)
     manifest_content = blob.download_as_text()
     return json.loads(manifest_content)
 
@@ -205,6 +214,11 @@ def run(argv: Optional[list[str]] = None) -> None:
 
     dataset_id = custom_options.dataset_id
     input_path = custom_options.input_path
+    chunk_id = int(custom_options.chunk_id)
+
+    logging.info(
+        f"Staging chunk {chunk_id} with input path {input_path} into dataset `{dataset_id}`"
+    )
 
     if ":" in dataset_id:
         project_id, dataset_id = dataset_id.split(":", 1)
@@ -212,19 +226,20 @@ def run(argv: Optional[list[str]] = None) -> None:
         project_id = gcp_options.project
 
     try:
-        manifest = read_manifest_from_gcs(input_path)
+        manifest = read_manifest_from_gcs(chunk_id, input_path)
         logging.info("Manifest content: %s", json.dumps(manifest))
     except Exception:
-        logging.exception("Failed to read manifest.json from GCS")
+        logging.exception("Failed to read manifest file from GCS")
         raise
 
-    if not manifest.get("table_files"):
-        raise ValueError("Manifest is missing 'table_files' key or it is empty.")
+    if not manifest.get("table_data"):
+        raise ValueError("Manifest is missing 'table_data' key or it is empty.")
 
-    logging.info(f"Loading table files: {manifest['table_files']}")
+    logging.info(f"Loading table files: {manifest['table_data']}")
 
     with apache_beam.Pipeline(options=options) as p:
-        for table_name, table_file in manifest["table_files"].items():
+        for table_name in manifest["table_data"].keys():
+            table_file = f"{table_name}.parquet"
             data = read_parquet(p, input_path, table_file)
             write_to_bigquery(data, project_id, dataset_id, table_name, temp_location)
 

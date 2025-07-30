@@ -97,7 +97,7 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         "launchParameter": {
             "jobName": job_name,
             "containerSpecGcsPath": DATAFLOW_TEMPLATE_PATH,
-            "parameters": {"input_path": input_path, "dataset_id": dataset_id},
+            "parameters": {"chunk_id": chunk_id, "input_path": input_path, "dataset_id": dataset_id},
             "environment": {
                 "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
                 "tempLocation": TEMP_LOCATION,
