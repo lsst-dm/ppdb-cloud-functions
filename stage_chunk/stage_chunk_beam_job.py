@@ -76,9 +76,9 @@ class CustomOptions(PipelineOptions):
         """
         parser.add_argument("--dataset_id", required=True, help="BigQuery dataset ID")
         parser.add_argument(
-            "--input_path",
+            "--folder",
             required=True,
-            help="GCS path to directory containing Parquet files",
+            help="GCS folder containing Parquet files",
         )
         parser.add_argument(
             "--chunk_id",
@@ -87,17 +87,15 @@ class CustomOptions(PipelineOptions):
         )
 
 
-def read_parquet(
-    pipeline: apache_beam.Pipeline, input_path: str, name: str
-) -> PCollection:
+def read_parquet(pipeline: apache_beam.Pipeline, folder: str, name: str) -> PCollection:
     """Read Parquet files from GCS.
 
     Parameters
     ----------
     pipeline : `apache_beam.Pipeline`
         The Apache Beam pipeline.
-    input_path : `str`
-        The GCS path to the directory containing Parquet files.
+    folder : `str`
+        The GCS folder containing Parquet files.
     name : `str`
         The name of the Parquet file to read (without extension).
 
@@ -106,7 +104,10 @@ def read_parquet(
     transform: `apache_beam.PTransform`
         The transform to read the Parquet file.
     """
-    return pipeline | f"Read{name}" >> ReadFromParquet(f"{input_path}/{name}")
+    folder = folder.rstrip("/") + "/"
+    parquet_path = f"{folder}{name}"
+    logging.info(f"Reading Parquet file: {parquet_path}")
+    return pipeline | f"Read{name}" >> ReadFromParquet(f"{parquet_path}")
 
 
 def write_to_bigquery(
@@ -136,6 +137,7 @@ def write_to_bigquery(
     transform: `apache_beam.PTransform`
         The transform to write the PCollection to BigQuery.
     """
+    logging.info(f"Writing to BigQuery table {project_id}:{dataset_id}.{table_name}")
     return pcoll | f"Write{table_name}" >> WriteToBigQuery(
         table=f"{project_id}:{dataset_id}.{table_name}",
         create_disposition=BigQueryDisposition.CREATE_NEVER,
@@ -144,7 +146,7 @@ def write_to_bigquery(
     )
 
 
-def parse_input_path(input_path: str) -> tuple[str, str]:
+def parse_folder(folder: str) -> tuple[str, str]:
     """Parse the input URL to extract the bucket name and object path.
 
     Parameters
@@ -157,19 +159,19 @@ def parse_input_path(input_path: str) -> tuple[str, str]:
     bucket_and_prefix: tuple[str, str]
         A tuple containing the bucket name and object prefix.
     """
-    parsed_url = urlparse(input_path)
+    parsed_url = urlparse(folder)
     if parsed_url.scheme != "gs":
-        raise ValueError("Input path must start with 'gs://'")
+        raise ValueError("Folder must start with 'gs://'")
     bucket_name = parsed_url.netloc
     object_path = parsed_url.path.lstrip("/").rstrip(
         "/"
     )  # Remove leading and trailing slashes from the object path.
     if not bucket_name or not object_path:
-        raise ValueError(f"Invalid GCS path: {input_path}")
+        raise ValueError(f"Invalid GCS folder: {folder}")
     return bucket_name, object_path
 
 
-def read_manifest_from_gcs(chunk_id: int, input_path: str) -> dict:
+def read_manifest(chunk_id: int, folder: str) -> dict:
     """Read the manifest.json file from GCS and return it as a Python
     dictionary.
 
@@ -177,8 +179,8 @@ def read_manifest_from_gcs(chunk_id: int, input_path: str) -> dict:
     ----------
     chunk_id : `int`
         The ID of the chunk being processed.
-    input_path : `str`
-        The GCS path to the directory containing the manifest.json file.
+    folder : `str`
+        The GCS prefix containing the manifest file.
 
     Returns
     -------
@@ -186,7 +188,7 @@ def read_manifest_from_gcs(chunk_id: int, input_path: str) -> dict:
         The contents of the manifest.json file as a Python dictionary.
     """
     # Parse the bucket name and object path from the input_path
-    bucket_name, object_prefix = parse_input_path(input_path)
+    bucket_name, object_prefix = parse_folder(folder)
 
     # Initialize the GCS client
     client = storage.Client()
@@ -213,11 +215,11 @@ def run(argv: Optional[list[str]] = None) -> None:
         raise ValueError("GCP temp_location must be set in pipeline options.")
 
     dataset_id = custom_options.dataset_id
-    input_path = custom_options.input_path
+    folder = custom_options.folder
     chunk_id = int(custom_options.chunk_id)
 
     logging.info(
-        f"Staging chunk {chunk_id} with input path {input_path} into dataset `{dataset_id}`"
+        f"Staging chunk {chunk_id} with folder {folder} into dataset `{dataset_id}`"
     )
 
     if ":" in dataset_id:
@@ -226,7 +228,7 @@ def run(argv: Optional[list[str]] = None) -> None:
         project_id = gcp_options.project
 
     try:
-        manifest = read_manifest_from_gcs(chunk_id, input_path)
+        manifest = read_manifest(chunk_id, folder)
         logging.info("Manifest content: %s", json.dumps(manifest))
     except Exception:
         logging.exception("Failed to read manifest file from GCS")
@@ -235,12 +237,12 @@ def run(argv: Optional[list[str]] = None) -> None:
     if not manifest.get("table_data"):
         raise ValueError("Manifest is missing 'table_data' key or it is empty.")
 
-    logging.info(f"Loading table files: {manifest['table_data']}")
+    logging.info(f"Loading table files: {manifest['table_data'].keys()}")
 
     with apache_beam.Pipeline(options=options) as p:
         for table_name in manifest["table_data"].keys():
             table_file = f"{table_name}.parquet"
-            data = read_parquet(p, input_path, table_file)
+            data = read_parquet(p, folder, table_file)
             write_to_bigquery(data, project_id, dataset_id, table_name, temp_location)
 
 

@@ -81,15 +81,13 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         return
 
     try:
-        bucket = data["bucket"]
-        name = data["name"]
         dataset_id = data["dataset"]
+        chunk_id = data["chunk_id"]
+        folder = data["folder"]
     except KeyError:
         logging.exception("Missing required key in Pub/Sub message")
         return
 
-    input_path = f"gs://{bucket}/{name}"
-    chunk_id = posixpath.basename(name)
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
     job_name = f"stage-chunk-{chunk_id}-{timestamp}"
 
@@ -97,7 +95,11 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         "launchParameter": {
             "jobName": job_name,
             "containerSpecGcsPath": DATAFLOW_TEMPLATE_PATH,
-            "parameters": {"chunk_id": chunk_id, "input_path": input_path, "dataset_id": dataset_id},
+            "parameters": {
+                "dataset_id": dataset_id,
+                "chunk_id": chunk_id,
+                "folder": folder,
+            },
             "environment": {
                 "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
                 "tempLocation": TEMP_LOCATION,
@@ -105,9 +107,7 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         }
     }
 
-    logging.info("Launching Dataflow job %s for input path %s", job_name, input_path)
-    logging.info("Triggered by event ID: %s", context.event_id)
-    logging.info("Dataflow launch body: %s", json.dumps(launch_body))
+    logging.info("Launching Dataflow job %s to stage chunk %d", job_name, chunk_id)
 
     try:
         request = (

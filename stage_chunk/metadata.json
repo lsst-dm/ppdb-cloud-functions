@@ -3,9 +3,9 @@
     "description": "Loads parquet chunks into BigQuery",
     "parameters": [
       {
-        "name": "input_path",
-        "label": "GCS input path",
-        "helpText": "Path to directory containing Parquet files",
+        "name": "folder",
+        "label": "GCS folder",
+        "helpText": "GCS URI pointing to prefix containing Parquet files",
         "paramType": "TEXT",
         "isOptional": false
       },
