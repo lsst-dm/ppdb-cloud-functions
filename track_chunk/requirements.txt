@@ -1,0 +1,6 @@
+functions-framework
+google-api-python-client
+google-cloud-logging
+google-cloud-secret-manager
+psycopg2-binary
+sqlalchemy
