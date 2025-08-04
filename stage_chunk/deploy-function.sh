@@ -2,31 +2,6 @@
 
 set -euxo pipefail
 
-if [ -z "${GCP_PROJECT:-}" ]; then
-  echo "GCP_PROJECT is unset or empty. Please set it to your Google Cloud project ID."
-  exit 1
-fi
-
-if [ -z "${GCS_BUCKET:-}" ]; then
-  echo "GCS_BUCKET is unset or empty. Please set it to your Google Cloud Storage bucket name."
-  exit 1
-fi
-
-if [ -z "${REGION:-}" ]; then
-  echo "REGION is unset or empty. Please set it to your Google Cloud region."
-  exit 1
-fi
-
-if [ -z "${SERVICE_ACCOUNT_EMAIL:-}" ]; then
-  echo "SERVICE_ACCOUNT_EMAIL is unset or empty. Please set it to your Google Cloud service account email."
-  exit 1
-fi
-
-if [ -z "${DATASET_ID:-}" ]; then
-  echo "DATASET_ID is unset or empty. Please set it to your Google Cloud dataset ID."
-  exit 1
-fi
-
 # Set Dataflow template path and temp location by convention
 DATAFLOW_TEMPLATE_PATH="gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json"
 TEMP_LOCATION="gs://${GCS_BUCKET}/dataflow/temp"
