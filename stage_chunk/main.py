@@ -22,8 +22,6 @@
 import base64
 import json
 import logging
-import os
-import posixpath
 from datetime import datetime, timezone
 from typing import Any
 
@@ -33,17 +31,10 @@ from google.cloud.functions_v1.context import Context
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-logging.basicConfig(level=logging.INFO)
+from lsst.ppdb.gcp.log_config import setup_logging
+from lsst.ppdb.gcp.env import require_env
 
-
-# Helper function to require environment variables
-def require_env(var_name: str) -> str:
-    """Require an environment variable to be set."""
-    value = os.getenv(var_name)
-    if not value:
-        raise LookupError(f"Missing required environment variable: {var_name}")
-    return value
-
+setup_logging()
 
 # Read required environment variables
 PROJECT_ID = require_env("PROJECT_ID")
@@ -51,6 +42,7 @@ DATAFLOW_TEMPLATE_PATH = require_env("DATAFLOW_TEMPLATE_PATH")
 REGION = require_env("REGION")
 SERVICE_ACCOUNT_EMAIL = require_env("SERVICE_ACCOUNT_EMAIL")
 TEMP_LOCATION = require_env("TEMP_LOCATION")
+TOPIC_NAME = require_env("TOPIC_NAME")
 
 _credentials, _ = google.auth.default()
 _dataflow_client = build("dataflow", "v1b3", credentials=_credentials)
@@ -99,6 +91,7 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
                 "dataset_id": dataset_id,
                 "chunk_id": chunk_id,
                 "folder": folder,
+                "topic_name": TOPIC_NAME,
             },
             "environment": {
                 "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
@@ -107,7 +100,7 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         }
     }
 
-    logging.info("Launching Dataflow job %s to stage chunk %d", job_name, chunk_id)
+    logging.info("Launching Dataflow job %s to stage chunk %s", job_name, chunk_id)
 
     try:
         request = (

@@ -20,6 +20,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
+import functools
 import json
 import logging
 from typing import Optional
@@ -35,6 +36,7 @@ from apache_beam.options.pipeline_options import (
     SetupOptions,
 )
 from google.cloud import storage
+from google.cloud import pubsub_v1
 
 logging.basicConfig(level=logging.INFO)
 
@@ -85,6 +87,11 @@ class CustomOptions(PipelineOptions):
             required=True,
             help="ID of the chunk being processed",
         )
+        parser.add_argument(
+            "--topic_name",
+            required=True,
+            help="Name of the Pub/Sub topic to publish chunk status updates",
+        )
 
 
 def read_parquet(pipeline: apache_beam.Pipeline, folder: str, name: str) -> PCollection:
@@ -110,11 +117,17 @@ def read_parquet(pipeline: apache_beam.Pipeline, folder: str, name: str) -> PCol
     return pipeline | f"Read{name}" >> ReadFromParquet(f"{parquet_path}")
 
 
+def add_replica_chunk_id(row: dict, chunk_id: int) -> dict:
+    row["replicaChunkId"] = chunk_id
+    return row
+
+
 def write_to_bigquery(
     pcoll: apache_beam.PCollection,
     project_id: str,
     dataset_id: str,
     table_name: str,
+    chunk_id: int,
     temp_location: str,
 ) -> PCollection:
     """Write PCollection to BigQuery.
@@ -138,11 +151,17 @@ def write_to_bigquery(
         The transform to write the PCollection to BigQuery.
     """
     logging.info(f"Writing to BigQuery table {project_id}:{dataset_id}.{table_name}")
-    return pcoll | f"Write{table_name}" >> WriteToBigQuery(
-        table=f"{project_id}:{dataset_id}.{table_name}",
-        create_disposition=BigQueryDisposition.CREATE_NEVER,
-        write_disposition=BigQueryDisposition.WRITE_APPEND,
-        custom_gcs_temp_location=temp_location,
+    return (
+        pcoll
+        | f"AddChunkId{table_name}"
+        >> apache_beam.Map(functools.partial(add_replica_chunk_id, chunk_id=chunk_id))
+        | f"Write{table_name}"
+        >> WriteToBigQuery(
+            table=f"{project_id}:{dataset_id}.{table_name}",
+            create_disposition=BigQueryDisposition.CREATE_NEVER,
+            write_disposition=BigQueryDisposition.WRITE_APPEND,
+            custom_gcs_temp_location=temp_location,
+        )
     )
 
 
@@ -202,6 +221,59 @@ def read_manifest(chunk_id: int, folder: str) -> dict:
     return json.loads(manifest_content)
 
 
+def update_chunk_status(project_id: str, topic_name: str, chunk_id: int) -> None:
+    """Update the status of the chunk in the tracking database.
+
+    Parameters
+    ----------
+    project_id : `str`
+        The GCP project ID.
+    topic_name : `str`
+        The name of the Pub/Sub topic to publish the status update.
+    chunk_id : `int`
+        The ID of the chunk being processed.
+    """
+    publisher = pubsub_v1.PublisherClient()
+    topic_path = publisher.topic_path(project_id, topic_name)
+
+    message = {
+        "operation": "update",
+        "apdb_replica_chunk": chunk_id,
+        "values": {
+            "status": "staged",
+        },
+    }
+    try:
+        future = publisher.publish(topic_path, json.dumps(message).encode("utf-8"))
+        future.result()  # Wait for the publish to complete
+        logging.info("Published message to topic %s: %s", topic_path, message)
+    except Exception:
+        logging.exception(
+            "Failed to publish message to topic %s: %s", topic_path, message
+        )
+        raise
+
+    logging.info(f"Published chunk status update for chunk {chunk_id}")
+
+
+def get_staging_table_name(table_name: str) -> str:
+    """Generate a staging table name based on the original table name. The
+    current convention is to prefix the original table name with an underscore
+    followed by "_staging".
+
+    Parameters
+    ----------
+    table_name : `str`
+        The original table name.
+
+    Returns
+    -------
+    staging_table_name: `str`
+        The staging table name.
+    """
+    return f"_{table_name}_staging"
+
+
 def run(argv: Optional[list[str]] = None) -> None:
     """Run the pipeline."""
     options = PipelineOptions(argv)
@@ -217,9 +289,10 @@ def run(argv: Optional[list[str]] = None) -> None:
     dataset_id = custom_options.dataset_id
     folder = custom_options.folder
     chunk_id = int(custom_options.chunk_id)
+    topic_name = custom_options.topic_name
 
     logging.info(
-        f"Staging chunk {chunk_id} with folder {folder} into dataset `{dataset_id}`"
+        f"Staging chunk {chunk_id} with folder {folder} into dataset `{dataset_id}` and topic `{topic_name}`."
     )
 
     if ":" in dataset_id:
@@ -243,7 +316,18 @@ def run(argv: Optional[list[str]] = None) -> None:
         for table_name in manifest["table_data"].keys():
             table_file = f"{table_name}.parquet"
             data = read_parquet(p, folder, table_file)
-            write_to_bigquery(data, project_id, dataset_id, table_name, temp_location)
+            staging_table_name = get_staging_table_name(table_name)
+            write_to_bigquery(
+                data,
+                project_id,
+                dataset_id,
+                staging_table_name,
+                chunk_id,
+                temp_location,
+            )
+
+    # Update the chunk status in the tracking database
+    update_chunk_status(project_id, topic_name, chunk_id)
 
 
 if __name__ == "__main__":
