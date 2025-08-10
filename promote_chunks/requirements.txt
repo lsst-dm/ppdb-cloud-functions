@@ -1,0 +1,6 @@
+flask
+google-cloud-bigquery
+google-cloud-logging
+google-cloud-storage
+
+lsst-ppdb-gcp @ git+https://github.com/lsst-dm/ppdb-gcp@tickets/DM-50562
