@@ -3,4 +3,4 @@ google-cloud-bigquery
 google-cloud-logging
 google-cloud-storage
 
-lsst-ppdb-gcp @ git+https://github.com/lsst-dm/ppdb-gcp@v0.0.8
+lsst-ppdb-gcp @ git+https://github.com/lsst-dm/ppdb-gcp@v0.0.19
