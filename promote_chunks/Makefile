@@ -11,7 +11,12 @@ function:
 	./deploy-function.sh
 	@echo "Done deploying function."
 
-deploy: function
+schedule:
+	@echo "Scheduling function..."
+	./schedule.sh
+	@echo "Done scheduling function."
+
+deploy: function schedule
 
 teardown:
 	@echo "Tearing down function..."
