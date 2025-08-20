@@ -1,11 +1,1 @@
-functions-framework
-google-auth
-google-cloud-bigquery
-google-cloud-logging
-google-cloud-pubsub
-google-cloud-secret-manager
-google-cloud-storage
-psycopg2-binary
-sqlalchemy
-
-lsst-ppdb-gcp @ git+https://github.com/lsst-dm/ppdb-gcp@tickets/DM-50562
+lsst-dax-ppdbx-gcp @ git+https://github.com/lsst-dm/dax_ppdbx_gcp@v0.0.28
