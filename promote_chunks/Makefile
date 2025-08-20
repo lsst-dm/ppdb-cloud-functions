@@ -1,7 +1,8 @@
 help:
 	@echo "Usage:"
 	@echo "  make function          Deploy the function"
-	@echo "  make deploy            Redeploy the container, function, and Flex template"
+	@echo "  make schedule          Schedule the function to run daily"
+	@echo "  make deploy            Redeploy and schedule the function"
 	@echo "  make teardown          Tear down the function"
 	@echo "  make test              Test the function with a sample call"
 	@echo "  make help              Show this help message"
