@@ -25,8 +25,8 @@ import json
 import logging
 from typing import Any
 
-from lsst.ppdb.gcp.db import ReplicaChunkDatabase
-from lsst.ppdb.gcp.log_config import setup_logging
+from lsst.dax.ppdbx.gcp.db import ReplicaChunkDatabase
+from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
 setup_logging()
 
@@ -34,7 +34,6 @@ db = ReplicaChunkDatabase.from_env()
 
 
 def track_chunk(event: dict[str, Any], context: Any) -> None:
-
     try:
         try:
             message = base64.b64decode(event["data"]).decode("utf-8")

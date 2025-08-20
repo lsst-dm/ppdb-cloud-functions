@@ -30,9 +30,8 @@ from google.api_core.exceptions import GoogleAPICallError
 from google.cloud.functions_v1.context import Context
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-
-from lsst.ppdb.gcp.log_config import setup_logging
-from lsst.ppdb.gcp.env import require_env
+from lsst.dax.ppdbx.gcp.env import require_env
+from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
 setup_logging()
 

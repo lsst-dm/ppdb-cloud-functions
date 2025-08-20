@@ -24,9 +24,9 @@
 import logging
 
 from flask import Request, jsonify
-from lsst.ppdb.gcp.bq import NoPromotableChunksError, ReplicaChunkPromoter
-from lsst.ppdb.gcp.db import ReplicaChunkDatabase
-from lsst.ppdb.gcp.log_config import setup_logging
+from lsst.dax.ppdbx.gcp.bq import NoPromotableChunksError, ReplicaChunkPromoter
+from lsst.dax.ppdbx.gcp.db import ReplicaChunkDatabase
+from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
 # Setup logging
 setup_logging()
