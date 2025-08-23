@@ -20,7 +20,6 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
-import functools
 import json
 import logging
 from typing import Optional
@@ -35,8 +34,7 @@ from apache_beam.options.pipeline_options import (
     PipelineOptions,
     SetupOptions,
 )
-from google.cloud import storage
-from google.cloud import pubsub_v1
+from google.cloud import pubsub_v1, storage
 
 logging.basicConfig(level=logging.INFO)
 
@@ -117,17 +115,11 @@ def read_parquet(pipeline: apache_beam.Pipeline, folder: str, name: str) -> PCol
     return pipeline | f"Read{name}" >> ReadFromParquet(f"{parquet_path}")
 
 
-def add_replica_chunk_id(row: dict, chunk_id: int) -> dict:
-    row["replicaChunkId"] = chunk_id
-    return row
-
-
 def write_to_bigquery(
     pcoll: apache_beam.PCollection,
     project_id: str,
     dataset_id: str,
     table_name: str,
-    chunk_id: int,
     temp_location: str,
 ) -> PCollection:
     """Write PCollection to BigQuery.
@@ -151,17 +143,11 @@ def write_to_bigquery(
         The transform to write the PCollection to BigQuery.
     """
     logging.info(f"Writing to BigQuery table {project_id}:{dataset_id}.{table_name}")
-    return (
-        pcoll
-        | f"AddChunkId{table_name}"
-        >> apache_beam.Map(functools.partial(add_replica_chunk_id, chunk_id=chunk_id))
-        | f"Write{table_name}"
-        >> WriteToBigQuery(
-            table=f"{project_id}:{dataset_id}.{table_name}",
-            create_disposition=BigQueryDisposition.CREATE_NEVER,
-            write_disposition=BigQueryDisposition.WRITE_APPEND,
-            custom_gcs_temp_location=temp_location,
-        )
+    return pcoll | f"Write{table_name}" >> WriteToBigQuery(
+        table=f"{project_id}:{dataset_id}.{table_name}",
+        create_disposition=BigQueryDisposition.CREATE_NEVER,
+        write_disposition=BigQueryDisposition.WRITE_APPEND,
+        custom_gcs_temp_location=temp_location,
     )
 
 
@@ -322,7 +308,6 @@ def run(argv: Optional[list[str]] = None) -> None:
                 project_id,
                 dataset_id,
                 staging_table_name,
-                chunk_id,
                 temp_location,
             )
 
