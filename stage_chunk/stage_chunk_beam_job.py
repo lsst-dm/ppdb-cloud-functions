@@ -34,9 +34,12 @@ from apache_beam.options.pipeline_options import (
     PipelineOptions,
     SetupOptions,
 )
+from google.cloud import logging as cloud_logging
 from google.cloud import pubsub_v1, storage
 
-logging.basicConfig(level=logging.INFO)
+# Configure Google Cloud logging
+cloud_logging.Client().setup_logging()
+logging.getLogger().setLevel(logging.INFO)
 
 
 class BeamSuppressUpdateDestinationSchemaWarning(logging.Filter):
