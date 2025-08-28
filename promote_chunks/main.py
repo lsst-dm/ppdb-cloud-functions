@@ -42,14 +42,14 @@ def promote_chunks(request: Request):
 
     Parameters
     ----------
-    request : Request
+    request : `Request`
         The Flask request object containing the payload for promotion. This
         will typically be empty as the promotion is based on the current state
         of the database.
 
     Returns
     -------
-    Response
+    response: `Response`
         A JSON response indicating the success or failure of the promotion.
         This will include the number of chunks promoted and any error messages,
         if applicable.
@@ -59,9 +59,11 @@ def promote_chunks(request: Request):
         # Fetch a list of promotable chunk IDs from the database
         promotable_chunks = _replica_chunk_db.get_promotable_chunks()
 
+        logging.info("Promotable chunk count: %s", len(promotable_chunks))
+
         # Promote the chunks using the ReplicaChunkPromoter
-        promoter = ReplicaChunkPromoter()
-        promoter.promote_chunks(promotable_chunks)
+        promoter = ReplicaChunkPromoter(promotable_chunks)
+        promoter.promote_chunks()
 
         # Mark the chunks as promoted in the chunk tracking database
         promoted_count = _replica_chunk_db.mark_chunks_promoted(promotable_chunks)
