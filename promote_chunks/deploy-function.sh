@@ -2,9 +2,6 @@
 
 set -euxo pipefail
 
-# Set the topic name for updating chunk statuses
-TOPIC_NAME="track-chunk-topic"
-
 LOG_LEVEL=${LOG_LEVEL:-INFO}
 
 gcloud functions deploy promote-chunks \
@@ -18,4 +15,6 @@ gcloud functions deploy promote-chunks \
   --service-account="${SERVICE_ACCOUNT_EMAIL}" \
   --memory=4Gi \
   --timeout=900s \
-  --set-env-vars "REGION=${GCP_REGION},PROJECT_ID=${GCP_PROJECT},DATASET_ID=${DATASET_ID},DB_HOST=${PPDB_DB_HOST_INTERNAL},DB_USER=${PPDB_DB_USER},DB_NAME=${PPDB_DB_NAME},DB_SCHEMA=${PPDB_SCHEMA_NAME}"
+  --vpc-connector=ppdb-vpc-connector \
+  --egress-settings=all \
+  --set-env-vars "REGION=${GCP_REGION},PROJECT_ID=${GCP_PROJECT},DATASET_ID=${DATASET_ID},DB_HOST=${PPDB_DB_HOST_INTERNAL},DB_USER=${PPDB_DB_USER},DB_NAME=${PPDB_DB_NAME},DB_SCHEMA=${PPDB_SCHEMA_NAME},LOG_LEVEL=${LOG_LEVEL}"
