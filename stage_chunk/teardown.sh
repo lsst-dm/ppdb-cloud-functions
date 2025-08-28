@@ -28,7 +28,7 @@ echo "Bucket: ${GCS_BUCKET}"
 echo "Region: ${GCP_REGION}"
 
 # Delete Cloud Function
-gcloud functions delete trigger_stage_chunk --region=${RGCP_REGION} --quiet
+gcloud functions delete trigger_stage_chunk --region=${GCP_REGION} --quiet
 
 # Delete Flex Template JSON
 gsutil rm -f gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json
