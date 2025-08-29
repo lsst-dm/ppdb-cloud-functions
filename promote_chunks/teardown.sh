@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -uxo pipefail
+set -ux
 
 if [ -z "${GCP_REGION:-}" ]; then
   echo "REGION is not set. Please set it to your Google Cloud region."

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -uxo pipefail
+set -ux
 
 # Delete Cloud Function
 gcloud functions delete track_chunk --region=${GCP_REGION} --quiet
