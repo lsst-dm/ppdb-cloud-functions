@@ -1,3 +1,8 @@
-functions-framework
 google-auth
+google-api-core
 google-api-python-client
+google-cloud-functions
+google-cloud-storage
+google-cloud-pubsub
+
+lsst-dax-ppdbx-gcp @ git+https://github.com/lsst-dm/dax_ppdbx_gcp@main

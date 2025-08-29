@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -uxo pipefail
+set -ux
 
 if [ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
   echo "GOOGLE_APPLICATION_CREDENTIALS is not set. Please set it to your service account key file."
@@ -12,7 +12,7 @@ if [ -z "${GCP_PROJECT:-}" ]; then
   exit 1
 fi
 
-if [ -z "${REGION:-}" ]; then
+if [ -z "${GCP_REGION:-}" ]; then
   echo "REGION is not set. Please set it to your Google Cloud region."
   exit 1
 fi
@@ -25,10 +25,10 @@ fi
 echo "Teardown started..."
 echo "Project ID: ${GCP_PROJECT}"
 echo "Bucket: ${GCS_BUCKET}"
-echo "Region: ${REGION}"
+echo "Region: ${GCP_REGION}"
 
 # Delete Cloud Function
-gcloud functions delete trigger_stage_chunk --region=${REGION} --quiet
+gcloud functions delete trigger_stage_chunk --region=${GCP_REGION} --quiet
 
 # Delete Flex Template JSON
 gsutil rm -f gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json

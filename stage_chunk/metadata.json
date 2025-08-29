@@ -3,9 +3,9 @@
     "description": "Loads parquet chunks into BigQuery",
     "parameters": [
       {
-        "name": "input_path",
-        "label": "GCS input path",
-        "helpText": "Path to directory containing Parquet files",
+        "name": "folder",
+        "label": "GCS folder",
+        "helpText": "GCS URI pointing to prefix containing Parquet files",
         "paramType": "TEXT",
         "isOptional": false
       },
@@ -13,6 +13,20 @@
         "name": "dataset_id",
         "label": "BigQuery dataset ID",
         "helpText": "Target BigQuery dataset",
+        "paramType": "TEXT",
+        "isOptional": false
+      },
+      {
+        "name": "chunk_id",
+        "label": "Chunk ID",
+        "helpText": "ID of the chunk being processed",
+        "paramType": "TEXT",
+        "isOptional": false
+      },
+      {
+        "name": "topic_name",
+        "label": "Pub/Sub Topic Name",
+        "helpText": "Name of the Pub/Sub topic to publish chunk status updates",
         "paramType": "TEXT",
         "isOptional": false
       }
