@@ -302,7 +302,10 @@ def run(argv: Optional[list[str]] = None) -> None:
     logging.info(f"Loading table files: {manifest['table_data'].keys()}")
 
     with apache_beam.Pipeline(options=options) as p:
-        for table_name in manifest["table_data"].keys():
+        for table_name, table_data in manifest["table_data"].items():
+            if table_data["row_count"] == 0:
+                logging.info(f"Skipping empty table {table_name}")
+                continue
             table_file = f"{table_name}.parquet"
             data = read_parquet(p, folder, table_file)
             staging_table_name = get_staging_table_name(table_name)
