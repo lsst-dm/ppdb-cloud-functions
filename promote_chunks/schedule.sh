@@ -9,10 +9,12 @@ FUNCTION_URL=$(gcloud functions describe promote-chunks \
 
 # Delete the existing Cloud Scheduler job if it exists
 gcloud scheduler jobs delete promote-chunks-daily \
+  --quiet \
   --location=us-central1 || true
 
-# Daily at 12:00 Chile time
+# Daily at 12:00 pm Chilean time
 gcloud scheduler jobs create http promote-chunks-daily \
+  --quiet \
   --location=us-central1 \
   --schedule="0 12 * * *" \
   --time-zone="America/Santiago" \

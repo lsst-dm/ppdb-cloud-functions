@@ -13,6 +13,7 @@ LOG_LEVEL=${LOG_LEVEL:-DEBUG}
 
 # Deploy the Cloud Function
 gcloud functions deploy trigger-stage-chunk \
+  --quiet \
   --runtime=python311 \
   --region=${GCP_REGION} \
   --source=. \

@@ -3,6 +3,8 @@
 set -ux
 
 # Delete Cloud Function
-gcloud functions delete track-chunk --region=${GCP_REGION} --quiet
+gcloud functions delete track-chunk \
+  --quiet \
+  --region=${GCP_REGION}
 
 echo "Teardown complete."

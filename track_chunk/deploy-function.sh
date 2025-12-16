@@ -4,6 +4,7 @@ set -euxo pipefail
 
 # Deploy the Cloud Function
 gcloud functions deploy track-chunk \
+  --quiet \
   --runtime=python311 \
   --region=${GCP_REGION} \
   --source=. \
