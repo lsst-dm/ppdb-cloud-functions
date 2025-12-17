@@ -5,6 +5,7 @@ set -euxo pipefail
 LOG_LEVEL=${LOG_LEVEL:-INFO}
 
 gcloud functions deploy promote-chunks \
+  --quiet \
   --gen2 \
   --region=us-central1 \
   --runtime=python311 \

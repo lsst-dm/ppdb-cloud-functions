@@ -5,6 +5,7 @@ help:
 	@echo "  make function          Deploy the function"
 	@echo "  make deploy            Redeploy the container, function, and Flex template"
 	@echo "  make teardown          Tear down the function"
+	@echo "  make env               Print the environment variables"
 	@echo "  make logs              Show the last 50 logs for the function"
 	@echo "  make help              Show this help message"
 
@@ -32,3 +33,8 @@ teardown:
 
 logs:
 	gcloud functions logs read trigger_stage_chunk --region=us-central1 --limit=50 | less
+
+env:
+	@echo "Printing environment variables..."
+	./print-env.sh
+	@echo "Done printing environment variables."

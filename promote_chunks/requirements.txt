@@ -1,1 +1,1 @@
-lsst-dax-ppdbx-gcp @ git+https://github.com/lsst-dm/dax_ppdbx_gcp@tickets/DM-53023
+lsst-dax-ppdbx-gcp @ git+https://github.com/lsst-dm/dax_ppdbx_gcp@tickets/DM-53599

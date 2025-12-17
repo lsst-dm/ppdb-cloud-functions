@@ -9,9 +9,11 @@ fi
 
 # Delete the promote chunks function
 gcloud functions delete promote-chunks \
+  --quiet \
   --gen2 \
   --region=$GCP_REGION
 
 # Deleted scheduled run
 gcloud scheduler jobs delete promote-chunks-daily \
+  --quiet \
   --location=us-central1
