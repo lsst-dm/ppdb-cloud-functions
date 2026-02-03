@@ -28,14 +28,15 @@ echo "Bucket: ${GCS_BUCKET}"
 echo "Region: ${GCP_REGION}"
 
 # Delete Cloud Function
-gcloud functions delete trigger-stage-chunk \
-  --quiet \
-  --region=${GCP_REGION}
+gcloud run services delete trigger-stage-chunk \
+  --region="${GCP_REGION}" \
+  --project="${GCP_PROJECT}" \
+  --quiet
 
 # Delete Flex Template JSON
 gsutil rm -f gs://${GCS_BUCKET}/templates/stage_chunk_flex_template.json
 
 # Delete Container Image (optional)
-gcloud artifacts docker images delete --quiet "us-central1-docker.pkg.dev/${GCP_PROJECT}/ppdb-docker-repo/stage-chunk-image:latest"
+gcloud artifacts docker images delete --quiet "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/ppdb-docker-repo/stage-chunk-image:latest"
 
 echo "Teardown complete."

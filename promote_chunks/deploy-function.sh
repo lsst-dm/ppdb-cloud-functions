@@ -17,6 +17,3 @@ gcloud functions deploy promote-chunks \
   --memory=4Gi \
   --timeout=900s \
   --set-env-vars "REGION=${GCP_REGION},PROJECT_ID=${GCP_PROJECT},DATASET_ID=${DATASET_ID},DB_HOST=${PPDB_DB_HOST_EXTERNAL},DB_USER=${PPDB_DB_USER},DB_NAME=${PPDB_DB_NAME},DB_SCHEMA=${PPDB_SCHEMA_NAME},LOG_LEVEL=${LOG_LEVEL}"
-
-#  --egress-settings=all \
-#  --vpc-connector=ppdb-connector \
