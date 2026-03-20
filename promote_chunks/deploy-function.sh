@@ -4,11 +4,12 @@ set -euxo pipefail
 
 LOG_LEVEL=${LOG_LEVEL:-INFO}
 
+# Deploy function into Python 3.13 environment with 15 minute timeout
 gcloud functions deploy promote-chunks \
   --quiet \
   --gen2 \
   --region=us-central1 \
-  --runtime=python311 \
+  --runtime=python313 \
   --source=. \
   --entry-point=promote_chunks \
   --trigger-http \
@@ -16,4 +17,4 @@ gcloud functions deploy promote-chunks \
   --service-account="${SERVICE_ACCOUNT_EMAIL}" \
   --memory=4Gi \
   --timeout=900s \
-  --set-env-vars "REGION=${GCP_REGION},PROJECT_ID=${GCP_PROJECT},DATASET_ID=${DATASET_ID},DB_HOST=${PPDB_DB_HOST_EXTERNAL},DB_USER=${PPDB_DB_USER},DB_NAME=${PPDB_DB_NAME},DB_SCHEMA=${PPDB_SCHEMA_NAME},LOG_LEVEL=${LOG_LEVEL}"
+  --set-env-vars "PPDB_CONFIG_URI=${PPDB_CONFIG_URI},PPDB_USE_SECRET_MANAGER=true"
