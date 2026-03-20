@@ -22,17 +22,30 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import logging
+import os
 
 from flask import Request, jsonify
-from lsst.dax.ppdbx.gcp.bq import NoPromotableChunksError, ReplicaChunkPromoter
-from lsst.dax.ppdbx.gcp.db import ReplicaChunkDatabase
 from lsst.dax.ppdbx.gcp.log_config import setup_logging
+
+from lsst.dax.ppdb.ppdb_config import PpdbConfig
+from lsst.dax.ppdb.ppdb import Ppdb
+from lsst.dax.ppdb.bigquery.replica_chunk_promoter import (
+    ReplicaChunkPromoter,
+    NoPromotableChunksError,
+)
+
+# Setup the PPDB interface from the configuration URI in the environment
+# TODO: Make this setup a class method in PpdbBigQuery
+ppdb_config_uri = os.environ.get("PPDB_CONFIG_URI")
+if ppdb_config_uri:
+    logging.info("PPDB_CONFIG_URI: %s", ppdb_config_uri)
+else:
+    raise RuntimeError("PPDB_CONFIG_URI environment variable is not set.")
+ppdb_config = PpdbConfig.from_uri(ppdb_config_uri)
+ppdb = Ppdb.from_config(ppdb_config)
 
 # Setup logging
 setup_logging()
-
-# Initialize the chunk tracking database
-_replica_chunk_db = ReplicaChunkDatabase.from_env()
 
 
 def promote_chunks(request: Request):
@@ -54,27 +67,42 @@ def promote_chunks(request: Request):
         This will include the number of chunks promoted and any error messages,
         if applicable.
     """
-    promoted_count = 0
+    dry_run = request.args.get("dry_run", "false").lower() == "true"
+
+    # Execute dry run if requested and just print the promotable chunks without
+    # making any changes
+    if dry_run:
+        logging.info("Dry run mode enabled - promotion will not be executed")
+        promotable_chunks = ppdb.get_promotable_chunks()
+        logging.info("Promotable replica chunks: %s", promotable_chunks)
+        return jsonify(
+            {
+                "ok": True,
+                "mode": "dry_run",
+                "chunks_promoted": 0,
+            }
+        ), 200
+
+    # Promote the chunks and return the result
     try:
-        # Fetch a list of promotable chunk IDs from the database
-        promotable_chunks = _replica_chunk_db.get_promotable_chunks()
-
-        logging.info("Promotable chunk count: %s", len(promotable_chunks))
-
-        # Promote the chunks using the ReplicaChunkPromoter
-        promoter = ReplicaChunkPromoter(promotable_chunks)
+        promoter = ReplicaChunkPromoter(ppdb)
         promoter.promote_chunks()
-
-        # Mark the chunks as promoted in the chunk tracking database
-        promoted_count = _replica_chunk_db.mark_chunks_promoted(promotable_chunks)
     except NoPromotableChunksError as e:
+        # This is not a real error condition. It just means there are no chunks
+        # ready for promotion. It is easiest to catch this as an exception.
         logging.info("No promotable chunks found: %s", str(e))
         return jsonify(
             {"ok": True, "message": "No promotable chunks found", "chunks_promoted": 0}
         ), 200
     except Exception as e:
+        # Some error occurred during the promotion process.
         logging.exception("Error during chunk promotion")
         return jsonify({"ok": False, "error": str(e), "chunks_promoted": 0}), 500
+    # Promotion succeeded! Return the number of chunks promoted
     return jsonify(
-        {"ok": True, "mode": "execute", "chunks_promoted": promoted_count}
+        {
+            "ok": True,
+            "mode": "execute",
+            "chunks_promoted": len(promoter.promotable_chunks),
+        }
     ), 200
