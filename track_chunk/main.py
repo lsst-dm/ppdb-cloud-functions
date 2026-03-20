@@ -23,14 +23,22 @@ import base64
 import binascii
 import json
 import logging
+import os
 from typing import Any
 
-from lsst.dax.ppdbx.gcp.db import ReplicaChunkDatabase
+from lsst.dax.ppdb.ppdb_config import PpdbConfig
+from lsst.dax.ppdb.ppdb import Ppdb
 from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
 setup_logging()
 
-db = ReplicaChunkDatabase.from_env()
+ppdb_config_uri = os.environ.get("PPDB_CONFIG_URI")
+if ppdb_config_uri:
+    logging.info("PPDB_CONFIG_URI: %s", ppdb_config_uri)
+else:
+    raise RuntimeError("PPDB_CONFIG_URI environment variable is not set.")
+ppdb_config = PpdbConfig.from_uri(ppdb_config_uri)
+ppdb = Ppdb.from_config(ppdb_config)
 
 
 def track_chunk(event: dict[str, Any], context: Any) -> None:
@@ -50,7 +58,8 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
         operation = data.get("operation")
         if not operation:
             raise KeyError("Missing 'operation' key in Pub/Sub message")
-        if operation not in ["insert", "update"]:
+        # if operation not in ["insert", "update"]:
+        if operation not in ["update"]:
             raise ValueError(f"Unsupported operation: {operation}")
 
         values = data.get("values")
@@ -63,9 +72,22 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
         chunk_id = data["apdb_replica_chunk"]
 
         if operation == "update":
-            db.update(chunk_id, values)
-        elif operation == "insert":
-            db.insert(chunk_id, values)
+            update_count = ppdb.update(chunk_id, values)
+            if update_count == 0:
+                logging.warning(
+                    "No rows updated for replica chunk %d with values: %s",
+                    chunk_id,
+                    values,
+                )
+            else:
+                logging.info(
+                    "Updated replica chunk %d with values: %s (affected rows: %d)",
+                    chunk_id,
+                    values,
+                    update_count,
+                )
+        # elif operation == "insert":
+        #    db.insert(chunk_id, values)
 
     except Exception:
         logging.exception("Error processing Pub/Sub message")
