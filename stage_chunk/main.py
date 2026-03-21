@@ -1,4 +1,4 @@
-# This file is part of ppdb-cloud-functions
+# This file is part of ppdb-cloud-functions.
 #
 # Developed for the LSST Data Management System.
 # This product includes software developed by the LSST Project
@@ -33,6 +33,7 @@ from googleapiclient.errors import HttpError
 from lsst.dax.ppdbx.gcp.env import require_env
 from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
+# Configure cloud logging
 setup_logging()
 
 # Read required environment variables

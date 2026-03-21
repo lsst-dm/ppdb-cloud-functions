@@ -22,30 +22,21 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import logging
-import os
 
 from flask import Request, jsonify
-from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
-from lsst.dax.ppdb.ppdb_config import PpdbConfig
-from lsst.dax.ppdb.ppdb import Ppdb
+from lsst.dax.ppdbx.gcp.log_config import setup_logging
+from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.replica_chunk_promoter import (
     ReplicaChunkPromoter,
     NoPromotableChunksError,
 )
 
-# Setup the PPDB interface from the configuration URI in the environment
-# TODO: Make this setup a class method in PpdbBigQuery
-ppdb_config_uri = os.environ.get("PPDB_CONFIG_URI")
-if ppdb_config_uri:
-    logging.info("PPDB_CONFIG_URI: %s", ppdb_config_uri)
-else:
-    raise RuntimeError("PPDB_CONFIG_URI environment variable is not set.")
-ppdb_config = PpdbConfig.from_uri(ppdb_config_uri)
-ppdb = Ppdb.from_config(ppdb_config)
-
-# Setup logging
+# Configure cloud logging
 setup_logging()
+
+# Setup PPDB BigQuery interface from environment variable configuration
+ppdb = PpdbBigQuery.from_env()
 
 
 def promote_chunks(request: Request):
@@ -69,8 +60,8 @@ def promote_chunks(request: Request):
     """
     dry_run = request.args.get("dry_run", "false").lower() == "true"
 
-    # Execute dry run if requested and just print the promotable chunks without
-    # making any changes
+    # Execute dry run if requested and just print the IDs of the promotable
+    # chunks without making any changes
     if dry_run:
         logging.info("Dry run mode enabled - promotion will not be executed")
         promotable_chunks = ppdb.get_promotable_chunks()
@@ -83,7 +74,7 @@ def promote_chunks(request: Request):
             }
         ), 200
 
-    # Promote the chunks and return the result
+    # Promote the chunks and return the number promoted
     try:
         promoter = ReplicaChunkPromoter(ppdb)
         promoter.promote_chunks()

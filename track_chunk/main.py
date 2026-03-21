@@ -1,4 +1,4 @@
-# This file is part of ppdb-cloud-functions
+# This file is part of ppdb-cloud-functions.
 #
 # Developed for the LSST Data Management System.
 # This product includes software developed by the LSST Project
@@ -23,22 +23,16 @@ import base64
 import binascii
 import json
 import logging
-import os
 from typing import Any
 
-from lsst.dax.ppdb.ppdb_config import PpdbConfig
-from lsst.dax.ppdb.ppdb import Ppdb
+from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
+# Configure cloud logging
 setup_logging()
 
-ppdb_config_uri = os.environ.get("PPDB_CONFIG_URI")
-if ppdb_config_uri:
-    logging.info("PPDB_CONFIG_URI: %s", ppdb_config_uri)
-else:
-    raise RuntimeError("PPDB_CONFIG_URI environment variable is not set.")
-ppdb_config = PpdbConfig.from_uri(ppdb_config_uri)
-ppdb = Ppdb.from_config(ppdb_config)
+# Setup PPDB BigQuery interface from environment variable configuration
+ppdb = PpdbBigQuery.from_env()
 
 
 def track_chunk(event: dict[str, Any], context: Any) -> None:
