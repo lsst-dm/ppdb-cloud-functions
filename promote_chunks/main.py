@@ -65,12 +65,12 @@ def promote_chunks(request: Request):
     if dry_run:
         logging.info("Dry run mode enabled - promotion will not be executed")
         promotable_chunks = ppdb.get_promotable_chunks()
-        logging.info("Promotable replica chunks: %s", promotable_chunks)
         return jsonify(
             {
                 "ok": True,
                 "mode": "dry_run",
                 "chunks_promoted": 0,
+                "promotable_chunk_count": len(promotable_chunks),
             }
         ), 200
 
