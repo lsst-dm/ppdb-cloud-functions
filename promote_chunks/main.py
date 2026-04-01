@@ -28,7 +28,7 @@ from flask import Request, jsonify
 from lsst.dax.ppdbx.gcp.log_config import setup_logging
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.replica_chunk_promoter import (
-    ReplicaChunkPromoter,
+    ChunkPromoter,
     NoPromotableChunksError,
 )
 
@@ -76,7 +76,7 @@ def promote_chunks(request: Request):
 
     # Promote the chunks and return the number promoted
     try:
-        promoter = ReplicaChunkPromoter(ppdb)
+        promoter = ChunkPromoter(ppdb)
         promoter.promote_chunks()
     except NoPromotableChunksError as e:
         # This is not a real error condition. It just means there are no chunks
