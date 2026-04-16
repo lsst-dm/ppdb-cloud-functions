@@ -1,1 +1,1 @@
-lsst-dax-ppdb @ git+https://github.com/lsst/dax_ppdb@tickets/DM-54070
+lsst-dax-ppdb @ git+https://github.com/lsst/dax_ppdb@main
