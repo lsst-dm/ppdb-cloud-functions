@@ -27,7 +27,7 @@ from flask import Request, jsonify
 
 from lsst.dax.ppdbx.gcp.log_config import setup_logging
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
-from lsst.dax.ppdb.bigquery.replica_chunk_promoter import (
+from lsst.dax.ppdb.bigquery.chunk_promoter import (
     ChunkPromoter,
     NoPromotableChunksError,
 )
