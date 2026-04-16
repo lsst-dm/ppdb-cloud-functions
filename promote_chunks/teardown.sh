@@ -10,9 +10,9 @@ fi
 gcloud run services delete promote-chunks \
   --region="${GCP_REGION}" \
   --project="${GCP_PROJECT}" \
-  --quiet
+  --quiet || true
 
 # Deleted scheduled run
 gcloud scheduler jobs delete promote-chunks-daily \
   --quiet \
-  --location="${GCP_REGION}"
+  --location="${GCP_REGION}" || true

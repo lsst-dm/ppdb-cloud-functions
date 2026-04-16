@@ -4,12 +4,13 @@ set -euxo pipefail
 
 # Deploy the Cloud Function
 gcloud functions deploy track-chunk \
-  --runtime=python311 \
+  --runtime=python313 \
   --region=${GCP_REGION} \
   --source=. \
   --entry-point=track_chunk \
   --service-account=${SERVICE_ACCOUNT_EMAIL} \
   --trigger-topic=track-chunk-topic \
-  --set-env-vars "PROJECT_ID=${GCP_PROJECT},DB_HOST=${PPDB_DB_HOST_EXTERNAL},DB_USER=${PPDB_DB_USER},DB_NAME=${PPDB_DB_NAME},DB_SCHEMA=${PPDB_SCHEMA_NAME}" \
+  --set-env-vars "PPDB_CONFIG_URI=${PPDB_CONFIG_URI},PPDB_USE_SECRET_MANAGER=true" \
   --gen2 \
+  --memory=4Gi \
   --quiet

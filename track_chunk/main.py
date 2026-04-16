@@ -1,4 +1,4 @@
-# This file is part of ppdb-cloud-functions
+# This file is part of ppdb-cloud-functions.
 #
 # Developed for the LSST Data Management System.
 # This product includes software developed by the LSST Project
@@ -25,12 +25,14 @@ import json
 import logging
 from typing import Any
 
-from lsst.dax.ppdbx.gcp.db import ReplicaChunkDatabase
+from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
+# Configure cloud logging
 setup_logging()
 
-db = ReplicaChunkDatabase.from_env()
+# Setup PPDB BigQuery interface from environment variable configuration
+ppdb = PpdbBigQuery.from_env()
 
 
 def track_chunk(event: dict[str, Any], context: Any) -> None:
@@ -50,7 +52,8 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
         operation = data.get("operation")
         if not operation:
             raise KeyError("Missing 'operation' key in Pub/Sub message")
-        if operation not in ["insert", "update"]:
+        # if operation not in ["insert", "update"]:
+        if operation not in ["update"]:
             raise ValueError(f"Unsupported operation: {operation}")
 
         values = data.get("values")
@@ -63,9 +66,22 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
         chunk_id = data["apdb_replica_chunk"]
 
         if operation == "update":
-            db.update(chunk_id, values)
-        elif operation == "insert":
-            db.insert(chunk_id, values)
+            update_count = ppdb.update(chunk_id, values)
+            if update_count == 0:
+                logging.warning(
+                    "No rows updated for replica chunk %d with values: %s",
+                    chunk_id,
+                    values,
+                )
+            else:
+                logging.info(
+                    "Updated replica chunk %d with values: %s (affected rows: %d)",
+                    chunk_id,
+                    values,
+                    update_count,
+                )
+        # elif operation == "insert":
+        #    db.insert(chunk_id, values)
 
     except Exception:
         logging.exception("Error processing Pub/Sub message")

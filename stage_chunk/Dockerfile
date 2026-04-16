@@ -1,4 +1,5 @@
-FROM gcr.io/dataflow-templates-base/python3-template-launcher-base:latest
+# Use the official Python image as the base image (Python 3.13)
+FROM gcr.io/dataflow-templates-base/python313-template-launcher-base:latest
 
 # Copy your pipeline code inside the container
 WORKDIR /dataflow/template

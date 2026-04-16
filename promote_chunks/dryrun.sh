@@ -8,5 +8,5 @@ URL=$(gcloud functions describe promote-chunks \
 
 echo "Calling promote-chunks function at: $URL"
 
-curl -X POST "$URL" \
+curl -X POST "$URL?dry_run=true" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)"
