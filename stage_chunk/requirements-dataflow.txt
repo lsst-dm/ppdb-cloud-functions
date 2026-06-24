@@ -1,0 +1,5 @@
+google-cloud-logging
+google-cloud-storage
+google-cloud-pubsub
+
+lsst-dax-ppdb @ git+https://github.com/lsst/dax_ppdb@main
