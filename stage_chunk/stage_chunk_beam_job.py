@@ -168,7 +168,7 @@ def parse_folder(folder: str) -> tuple[str, str]:
     if parsed_url.scheme != "gs":
         raise ValueError("Folder must start with 'gs://'")
     bucket_name = parsed_url.netloc
-    object_path = parsed_url.path.lstrip("/").rstrip("/")
+    object_path = parsed_url.path.strip("/")
     if not bucket_name or not object_path:
         raise ValueError(f"Invalid GCS folder: {folder}")
     return bucket_name, object_path
@@ -269,17 +269,17 @@ def run(argv: Optional[list[str]] = None) -> None:
         manifest = read_manifest(chunk_id, folder)
         logging.info(
             "Read manifest contents: %s",
-            manifest.model_dump_json(indent=2),
+            manifest.model_dump_json(),
         )
     except Exception:
         logging.exception("Failed to read manifest file from GCS")
         raise
 
     if manifest.is_empty_chunk:
-        logging.info(f"Chunk {chunk_id} is empty. No data to stage.")
+        logging.info("Chunk %d is empty. No data to stage.", chunk_id)
         return
 
-    logging.info("Loading table files: %s", manifest.files.keys())
+    logging.info("Loading table files: %s", list(manifest.files))
 
     # Filter out the update records file from the list of parquet files to be
     # staged.
