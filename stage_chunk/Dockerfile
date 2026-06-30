@@ -1,15 +1,16 @@
-# Use the official Python image as the base image (Python 3.13)
+# Use the official Python image as the base image (Python 3.13).
 FROM gcr.io/dataflow-templates-base/python313-template-launcher-base:latest
 
-# Copy your pipeline code inside the container
+# Copy your pipeline code inside the container.
 WORKDIR /dataflow/template
 COPY stage_chunk_beam_job.py .
 
-# Install dependencies
-RUN pip install --no-cache-dir google-cloud-logging google-cloud-storage google-cloud-pubsub
+# Install the required dependencies.
+COPY requirements-dataflow.txt .
+RUN pip install --no-cache-dir -r requirements-dataflow.txt
 
-# Set required environment variable for Flex Templates
+# Set required environment variable for Flex Templates.
 ENV FLEX_TEMPLATE_PYTHON_PY_FILE=stage_chunk_beam_job.py
 
-# Use the standard launcher ENTRYPOINT
+# Use the standard launcher ENTRYPOINT.
 ENTRYPOINT ["/opt/apache/beam/boot"]

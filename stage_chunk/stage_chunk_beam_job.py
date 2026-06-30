@@ -1,4 +1,4 @@
-# This file is part of ppdb-cloud-functions
+# This file is part of ppdb-cloud-functions.
 #
 # Developed for the LSST Data Management System.
 # This product includes software developed by the LSST Project
@@ -22,6 +22,8 @@
 import argparse
 import json
 import logging
+import posixpath
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -36,6 +38,8 @@ from apache_beam.options.pipeline_options import (
 )
 from google.cloud import logging as cloud_logging
 from google.cloud import pubsub_v1, storage
+from lsst.dax.ppdb.bigquery import Manifest
+from lsst.dax.ppdb.bigquery.updates import UpdateRecords
 
 # Configure Google Cloud logging
 cloud_logging.Client().setup_logging()
@@ -112,17 +116,14 @@ def read_parquet(pipeline: apache_beam.Pipeline, folder: str, name: str) -> PCol
     transform: `apache_beam.PTransform`
         The transform to read the Parquet file.
     """
-    folder = folder.rstrip("/") + "/"
-    parquet_path = f"{folder}{name}"
-    logging.info(f"Reading Parquet file: {parquet_path}")
+    parquet_path = posixpath.join(folder.rstrip("/"), name.lstrip("/"))
+    logging.info("Reading Parquet file: %s", parquet_path)
     return pipeline | f"Read{name}" >> ReadFromParquet(f"{parquet_path}")
 
 
 def write_to_bigquery(
     pcoll: apache_beam.PCollection,
-    project_id: str,
-    dataset_id: str,
-    table_name: str,
+    table_fqn: str,
     temp_location: str,
 ) -> PCollection:
     """Write PCollection to BigQuery.
@@ -131,12 +132,8 @@ def write_to_bigquery(
     ----------
     pcoll : `apache_beam.PCollection`
         The PCollection to write to BigQuery.
-    project_id : `str`
-        The GCP project ID.
-    dataset_id : `str`
-        The BigQuery dataset ID.
-    table_name : `str`
-        The name of the BigQuery table.
+    table_fqn : `str`
+        The fully qualified name of the BigQuery table in the format `project_id:dataset_id.table_name`.
     temp_location : `str`
         The GCS path for temporary files.
 
@@ -145,9 +142,9 @@ def write_to_bigquery(
     transform: `apache_beam.PTransform`
         The transform to write the PCollection to BigQuery.
     """
-    logging.info(f"Writing to BigQuery table {project_id}:{dataset_id}.{table_name}")
-    return pcoll | f"Write{table_name}" >> WriteToBigQuery(
-        table=f"{project_id}:{dataset_id}.{table_name}",
+    logging.info("Writing to BigQuery table %s", table_fqn)
+    return pcoll | f"Write{table_fqn}" >> WriteToBigQuery(
+        table=table_fqn,
         create_disposition=BigQueryDisposition.CREATE_NEVER,
         write_disposition=BigQueryDisposition.WRITE_APPEND,
         custom_gcs_temp_location=temp_location,
@@ -159,7 +156,7 @@ def parse_folder(folder: str) -> tuple[str, str]:
 
     Parameters
     ----------
-    input_path : `str`
+    folder : `str`
         The GCS URL to the prefix containing the manifest.json file.
 
     Returns
@@ -171,17 +168,14 @@ def parse_folder(folder: str) -> tuple[str, str]:
     if parsed_url.scheme != "gs":
         raise ValueError("Folder must start with 'gs://'")
     bucket_name = parsed_url.netloc
-    object_path = parsed_url.path.lstrip("/").rstrip(
-        "/"
-    )  # Remove leading and trailing slashes from the object path.
+    object_path = parsed_url.path.strip("/")
     if not bucket_name or not object_path:
         raise ValueError(f"Invalid GCS folder: {folder}")
     return bucket_name, object_path
 
 
-def read_manifest(chunk_id: int, folder: str) -> dict:
-    """Read the manifest.json file from GCS and return it as a Python
-    dictionary.
+def read_manifest(chunk_id: int, folder: str) -> Manifest:
+    """Read the chunk's manifest from its GCS location.
 
     Parameters
     ----------
@@ -192,22 +186,22 @@ def read_manifest(chunk_id: int, folder: str) -> dict:
 
     Returns
     -------
-    manifest_dict: `dict`
-        The contents of the manifest.json file as a Python dictionary.
+    manifest: `Manifest`
+        The contents of the manifest.json file as a Manifest object.
     """
-    # Parse the bucket name and object path from the input_path
+    # Parse the bucket name and object path from the folder.
     bucket_name, object_prefix = parse_folder(folder)
 
-    # Initialize the GCS client
+    # Initialize the GCS client.
     client = storage.Client()
     bucket = client.bucket(bucket_name)
-    manifest_path = f"{object_prefix}/chunk_{chunk_id}.manifest.json"
+    manifest_path = posixpath.join(object_prefix, Manifest.FILE_NAME)
     logging.info(f"Reading manifest from: gs://{bucket_name}/{manifest_path}")
 
     # Download the manifest file and return its data.
     blob = bucket.blob(manifest_path)
     manifest_content = blob.download_as_text()
-    return json.loads(manifest_content)
+    return Manifest.from_json_str(manifest_content)
 
 
 def update_chunk_status(project_id: str, topic_name: str, chunk_id: int) -> None:
@@ -245,24 +239,6 @@ def update_chunk_status(project_id: str, topic_name: str, chunk_id: int) -> None
     logging.info(f"Published chunk status update for chunk {chunk_id}")
 
 
-def get_staging_table_name(table_name: str) -> str:
-    """Generate a staging table name based on the original table name. The
-    current convention is to prefix the original table name with an underscore
-    followed by "_staging".
-
-    Parameters
-    ----------
-    table_name : `str`
-        The original table name.
-
-    Returns
-    -------
-    staging_table_name: `str`
-        The staging table name.
-    """
-    return f"_{table_name}_staging"
-
-
 def run(argv: Optional[list[str]] = None) -> None:
     """Run the pipeline."""
     options = PipelineOptions(argv)
@@ -291,33 +267,45 @@ def run(argv: Optional[list[str]] = None) -> None:
 
     try:
         manifest = read_manifest(chunk_id, folder)
-        logging.info("Manifest content: %s", json.dumps(manifest))
+        logging.info(
+            "Read manifest contents: %s",
+            manifest.model_dump_json(),
+        )
     except Exception:
         logging.exception("Failed to read manifest file from GCS")
         raise
 
-    if not manifest.get("table_data"):
-        raise ValueError("Manifest is missing 'table_data' key or it is empty.")
+    if manifest.is_empty_chunk:
+        logging.info("Chunk %d is empty. No data to stage.", chunk_id)
+        return
 
-    logging.info(f"Loading table files: {manifest['table_data'].keys()}")
+    logging.info("Loading table files: %s", list(manifest.files))
 
-    with apache_beam.Pipeline(options=options) as p:
-        for table_name, table_data in manifest["table_data"].items():
-            if table_data["row_count"] == 0:
-                logging.info(f"Skipping empty table {table_name}")
-                continue
-            table_file = f"{table_name}.parquet"
-            data = read_parquet(p, folder, table_file)
-            staging_table_name = get_staging_table_name(table_name)
+    # Filter out the update records file from the list of parquet files to be
+    # staged.
+    parquet_files = [
+        name
+        for name in manifest.files.keys()
+        if name != UpdateRecords.PARQUET_FILE_NAME
+    ]
+
+    with apache_beam.Pipeline(options=options) as pipeline:
+        for file_name in parquet_files:
+            data = read_parquet(pipeline, folder, file_name)
+
+            # TODO: This table name will be changed by DM-54681 to use the
+            # staging dataset with the same table name as the source, e.g.,
+            # 'DiaObject'. For now, we use the conventional staging table name
+            # in the single dataset.
+            table_fqn = f"{project_id}:{dataset_id}._{Path(file_name).stem}_staging"
+
             write_to_bigquery(
                 data,
-                project_id,
-                dataset_id,
-                staging_table_name,
+                table_fqn,
                 temp_location,
             )
 
-    # Update the chunk status in the tracking database
+    # Update the chunk status in the tracking database.
     update_chunk_status(project_id, topic_name, chunk_id)
 
 

@@ -24,13 +24,12 @@
 import logging
 
 from flask import Request, jsonify
-
-from lsst.dax.ppdbx.gcp.log_config import setup_logging
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.chunk_promoter import (
     ChunkPromoter,
     NoPromotableChunksError,
 )
+from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
 # Configure cloud logging
 setup_logging()
@@ -60,24 +59,27 @@ def promote_chunks(request: Request):
     """
     dry_run = request.args.get("dry_run", "false").lower() == "true"
 
-    # Execute dry run if requested and just print the IDs of the promotable
-    # chunks without making any changes
+    promotable_chunks = ppdb.get_promotable_chunks()
+    chunk_count = len(promotable_chunks)
+    logging.info("Found %d promotable chunks", chunk_count)
+
+    # Execute dry run if requested and just print the number of promotable
+    # chunks without making any changes.
     if dry_run:
         logging.info("Dry run mode enabled - promotion will not be executed")
-        promotable_chunks = ppdb.get_promotable_chunks()
         return jsonify(
             {
                 "ok": True,
                 "mode": "dry_run",
                 "chunks_promoted": 0,
-                "promotable_chunk_count": len(promotable_chunks),
+                "promotable_chunk_count": chunk_count,
             }
         ), 200
 
-    # Promote the chunks and return the number promoted
+    # Promote the chunks and return the number promoted.
     try:
         promoter = ChunkPromoter(ppdb)
-        promoter.promote_chunks()
+        promoter.promote_chunks(promotable_chunks)
     except NoPromotableChunksError as e:
         # This is not a real error condition. It just means there are no chunks
         # ready for promotion. It is easiest to catch this as an exception.
@@ -89,11 +91,12 @@ def promote_chunks(request: Request):
         # Some error occurred during the promotion process.
         logging.exception("Error during chunk promotion")
         return jsonify({"ok": False, "error": str(e), "chunks_promoted": 0}), 500
-    # Promotion succeeded! Return the number of chunks promoted
+
+    # Promotion succeeded! Return the number of chunks promoted.
     return jsonify(
         {
             "ok": True,
             "mode": "execute",
-            "chunks_promoted": len(promoter.promotable_chunks),
+            "chunks_promoted": chunk_count,
         }
     ), 200
