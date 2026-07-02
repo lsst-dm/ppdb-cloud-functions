@@ -22,27 +22,31 @@
 import base64
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
 import google.auth
 from google.api_core.exceptions import GoogleAPICallError
+from google.cloud import logging as cloud_logging
 from google.cloud.functions_v1.context import Context
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from lsst.dax.ppdbx.gcp.env import require_env
-from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
 # Configure cloud logging
-setup_logging()
+client = cloud_logging.Client()
+client.setup_logging()  # Redirects standard logging to Cloud Logging
+log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+logging.getLogger().setLevel(log_level)
 
 # Read required environment variables
-PROJECT_ID = require_env("PROJECT_ID")
-DATAFLOW_TEMPLATE_PATH = require_env("DATAFLOW_TEMPLATE_PATH")
-REGION = require_env("REGION")
-SERVICE_ACCOUNT_EMAIL = require_env("SERVICE_ACCOUNT_EMAIL")
-TEMP_LOCATION = require_env("TEMP_LOCATION")
-TOPIC_NAME = require_env("TOPIC_NAME")
+PROJECT_ID = os.environ["PROJECT_ID"]
+DATAFLOW_TEMPLATE_PATH = os.environ["DATAFLOW_TEMPLATE_PATH"]
+REGION = os.environ["REGION"]
+SERVICE_ACCOUNT_EMAIL = os.environ["SERVICE_ACCOUNT_EMAIL"]
+TEMP_LOCATION = os.environ["TEMP_LOCATION"]
+TOPIC_NAME = os.environ["TOPIC_NAME"]
 
 _credentials, _ = google.auth.default()
 _dataflow_client = build("dataflow", "v1b3", credentials=_credentials)
