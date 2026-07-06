@@ -33,14 +33,17 @@ from google.cloud.functions_v1.context import Context
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-# Configure cloud logging
+# Configure cloud logging.
 client = cloud_logging.Client()
 client.setup_logging()  # Redirects standard logging to Cloud Logging
 log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
 log_level = getattr(logging, log_level_str, logging.INFO)
 logging.getLogger().setLevel(log_level)
 
-# Read required environment variables
+# Silence noisy warnings from
+logging.getLogger("google_auth_httplib2").setLevel(logging.ERROR)
+
+# Read required environment variables.
 PROJECT_ID = os.environ["PROJECT_ID"]
 DATAFLOW_TEMPLATE_PATH = os.environ["DATAFLOW_TEMPLATE_PATH"]
 REGION = os.environ["REGION"]
