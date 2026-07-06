@@ -52,7 +52,12 @@ TEMP_LOCATION = os.environ["TEMP_LOCATION"]
 TOPIC_NAME = os.environ["TOPIC_NAME"]
 
 _credentials, _ = google.auth.default()
-_dataflow_client = build("dataflow", "v1b3", credentials=_credentials)
+_dataflow_client = build(
+    "dataflow",
+    "v1b3",
+    credentials=_credentials,
+    cache_discovery=False,
+)
 
 
 def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
