@@ -91,6 +91,37 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
             extra={"json_fields": {"event": event_name, **log_fields, **fields}},
         )
 
+    def handle_error(e: Exception) -> bool:
+        """Log a job-submission failure and report whether it is retryable."""
+        extra_fields: dict[str, Any] = {}
+        if isinstance(e, HttpError):
+            retryable = e.resp.status in (429, 500, 503)
+            extra_fields["http_status"] = e.resp.status
+        elif isinstance(e, GoogleAPICallError):
+            retryable = True
+        else:
+            retryable = False
+
+        if retryable:
+            level = logging.WARNING
+            log_message = "Retryable error during job submission"
+            event_name = "retryable_error"
+        else:
+            level = logging.ERROR
+            log_message = "Non-retryable error during job submission"
+            event_name = "non_retryable_error"
+
+        log_event(
+            level,
+            log_message,
+            event_name,
+            exc_info=True,
+            error=str(e),
+            error_type=type(e).__name__,
+            **extra_fields,
+        )
+        return retryable
+
     try:
         message = base64.b64decode(event["data"]).decode("utf-8")
     except Exception:
@@ -206,41 +237,9 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
             dataflow_job_id=job_id,
             dataflow_job_name=job_name,
         )
-    except HttpError as e:
-        retryable = e.resp.status in (429, 500, 503)
-        log_event(
-            logging.WARNING if retryable else logging.ERROR,
-            "Retryable HTTP error" if retryable else "Non-retryable HTTP error",
-            "retryable_http_error" if retryable else "non_retryable_http_error",
-            exc_info=True,
-            http_status=e.resp.status,
-            error=str(e),
-            error_type=type(e).__name__,
-        )
-        if retryable:
-            raise  # Will trigger retry
-        return  # Acknowledge message
-
-    except GoogleAPICallError as e:
-        log_event(
-            logging.WARNING,
-            "Retryable GCP API error",
-            "gcp_api_error",
-            exc_info=True,
-            error=str(e),
-            error_type=type(e).__name__,
-        )
-        raise  # Will trigger retry
-
     except Exception as e:
-        log_event(
-            logging.ERROR,
-            "Unexpected error during job submission",
-            "unexpected_error",
-            exc_info=True,
-            error=str(e),
-            error_type=type(e).__name__,
-        )
+        if handle_error(e):
+            raise  # Will trigger retry
         return  # Acknowledge message
 
     return
