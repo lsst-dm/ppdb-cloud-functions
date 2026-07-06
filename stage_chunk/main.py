@@ -64,16 +64,56 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
     context : `google.cloud.functions.Context`
         Metadata of triggering event including `event_id`.
     """
+    # Fields attached to every structured log entry for this invocation.
+    log_fields: dict[str, Any] = {"event_id": getattr(context, "event_id", None)}
+
+    def log_event(
+        level: int,
+        message: str,
+        event_name: str,
+        *,
+        exc_info: bool = False,
+        **fields: Any,
+    ) -> None:
+        """Emit a structured log entry under Cloud Logging ``json_fields``."""
+        logging.log(
+            level,
+            message,
+            exc_info=exc_info,
+            extra={"json_fields": {"event": event_name, **log_fields, **fields}},
+        )
+
     try:
         message = base64.b64decode(event["data"]).decode("utf-8")
     except Exception:
-        logging.exception("Malformed or missing Pub/Sub data payload")
+        log_event(
+            logging.WARNING,
+            "Malformed or missing Pub/Sub data payload",
+            "malformed_pubsub_payload",
+            exc_info=True,
+            pubsub_event=event,
+        )
         return
 
     try:
         data = json.loads(message)
     except json.JSONDecodeError:
-        logging.exception("Failed to decode JSON from Pub/Sub message")
+        log_event(
+            logging.WARNING,
+            "Failed to decode JSON from Pub/Sub message",
+            "json_decode_error",
+            exc_info=True,
+            pubsub_message=message,
+        )
+        return
+
+    if not isinstance(data, dict):
+        log_event(
+            logging.WARNING,
+            "Pub/Sub message is not a JSON object",
+            "invalid_payload_type",
+            pubsub_message=data,
+        )
         return
 
     try:
@@ -81,8 +121,27 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         chunk_id = data["chunk_id"]
         folder = data["folder"]
     except KeyError:
-        logging.exception("Missing required key in Pub/Sub message")
+        log_event(
+            logging.WARNING,
+            "Missing required key in Pub/Sub message",
+            "missing_key_in_pubsub_message",
+            exc_info=True,
+            missing_keys=[
+                key for key in ["dataset", "chunk_id", "folder"] if key not in data
+            ],
+            pubsub_message=data,
+        )
         return
+
+    # Attach the correlation identifiers to all subsequent logs.
+    log_fields.update(chunk_id=chunk_id, dataset=dataset_id)
+
+    log_event(
+        logging.INFO,
+        "Received stage chunk request",
+        "stage_chunk_request_received",
+        gcs_folder=folder,
+    )
 
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
     job_name = f"stage-chunk-{chunk_id}-{timestamp}"
@@ -104,7 +163,13 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         }
     }
 
-    logging.info("Launching Dataflow job %s to stage chunk %s", job_name, chunk_id)
+    log_event(
+        logging.INFO,
+        "Launching Dataflow job",
+        "dataflow_job_launching",
+        dataflow_job_name=job_name,
+        launch_parameters=launch_body["launchParameter"]["parameters"],
+    )
 
     try:
         request = (
@@ -116,26 +181,58 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         response = request.execute()
 
         if "job" not in response:
-            logging.error("Dataflow API response missing 'job' field: %s", response)
+            log_event(
+                logging.ERROR,
+                "Dataflow API response missing 'job' field",
+                "dataflow_response_missing_job",
+                dataflow_response=response,
+            )
             return
 
         job_id = response.get("job", {}).get("id", "unknown")
-        logging.info(f"Dataflow job launched: {job_id}")
 
+        log_event(
+            logging.INFO,
+            "Dataflow job launched successfully",
+            "dataflow_job_launched",
+            dataflow_job_id=job_id,
+            dataflow_job_name=job_name,
+        )
     except HttpError as e:
-        if e.resp.status in [429, 500, 503]:
-            logging.warning("Retryable HTTP error (%s): %s", e.resp.status, e)
+        retryable = e.resp.status in (429, 500, 503)
+        log_event(
+            logging.WARNING if retryable else logging.ERROR,
+            "Retryable HTTP error" if retryable else "Non-retryable HTTP error",
+            "retryable_http_error" if retryable else "non_retryable_http_error",
+            exc_info=True,
+            http_status=e.resp.status,
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+        if retryable:
             raise  # Will trigger retry
-        else:
-            logging.error("Non-retryable HTTP error: %s", e)
-            return  # Acknowledge message
+        return  # Acknowledge message
 
-    except GoogleAPICallError:
-        logging.exception("Retryable GCP API error")
+    except GoogleAPICallError as e:
+        log_event(
+            logging.WARNING,
+            "Retryable GCP API error",
+            "gcp_api_error",
+            exc_info=True,
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         raise  # Will trigger retry
 
-    except Exception:
-        logging.exception("Unexpected error during job submission")
+    except Exception as e:
+        log_event(
+            logging.ERROR,
+            "Unexpected error during job submission",
+            "unexpected_error",
+            exc_info=True,
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         return  # Acknowledge message
 
     return
