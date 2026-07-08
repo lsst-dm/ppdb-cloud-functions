@@ -63,17 +63,17 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
             },
         )
 
-        operation = data.get("operation", None)
+        operation = data.get("operation")
         if not operation:
             raise ValueError("Empty 'operation' value in Pub/Sub message")
         if operation != "update":
             raise ValueError(f"Unsupported operation: {operation}")
 
-        values = data.get("values", None)
+        values = data.get("values")
         if not values:
             raise ValueError("No 'values' key found in Pub/Sub message")
 
-        chunk_id = data.get("apdb_replica_chunk", None)
+        chunk_id = data.get("apdb_replica_chunk")
         if not chunk_id:
             raise ValueError("No 'apdb_replica_chunk' value in Pub/Sub message")
 
@@ -84,7 +84,7 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
         if not chunk:
             raise LookupError(f"Replica chunk {chunk_id} not found")
 
-        new_status = values.get("status", None)
+        new_status = values.get("status")
         if not new_status:
             raise ValueError("Empty 'status' value in values for update operation")
 
@@ -92,6 +92,7 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
             [chunk.with_new_status(ChunkStatus(new_status))], {"status"}
         )
         if update_count < 1:
+            # This should not happen but raise an error just in case.
             raise LookupError(
                 f"Failed to update replica chunk {chunk_id} with values: {values}"
             )
