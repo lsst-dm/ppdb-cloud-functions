@@ -40,7 +40,7 @@ log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
 log_level = getattr(logging, log_level_str, logging.INFO)
 logging.getLogger().setLevel(log_level)
 
-# Silence noisy warnings from
+# Silence noisy warnings from google-auth-httplib2.
 logging.getLogger("google_auth_httplib2").setLevel(logging.ERROR)
 
 # Read required environment variables.
