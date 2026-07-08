@@ -293,11 +293,7 @@ def run(argv: Optional[list[str]] = None) -> None:
         for file_name in parquet_files:
             data = read_parquet(pipeline, folder, file_name)
 
-            # TODO: This table name will be changed by DM-54681 to use the
-            # staging dataset with the same table name as the source, e.g.,
-            # 'DiaObject'. For now, we use the conventional staging table name
-            # in the single dataset.
-            table_fqn = f"{project_id}:{dataset_id}._{Path(file_name).stem}_staging"
+            table_fqn = f"{project_id}:{dataset_id}.{Path(file_name).stem}"
 
             write_to_bigquery(
                 data,

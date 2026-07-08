@@ -23,13 +23,22 @@ import base64
 import binascii
 import json
 import logging
+import os
 from typing import Any
 
-from lsst.dax.ppdb.bigquery import PpdbBigQuery
-from lsst.dax.ppdbx.gcp.log_config import setup_logging
+from google.cloud import logging as cloud_logging
+from lsst.dax.ppdb.bigquery import (
+    ChunkStatus,
+    PpdbBigQuery,
+)
 
-# Configure cloud logging
-setup_logging()
+# Configure cloud logging.
+client = cloud_logging.Client()
+client.setup_logging()  # Redirects standard logging to Cloud Logging
+log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+logging.getLogger().setLevel(log_level)
+
 
 # Setup PPDB BigQuery interface from environment variable configuration
 ppdb = PpdbBigQuery.from_env()
@@ -47,41 +56,58 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
         except json.JSONDecodeError as e:
             raise Exception("Failed to decode JSON from Pub/Sub message") from e
 
-        logging.info("Received Pub/Sub message: %s", data)
+        logging.info(
+            "Received event to track replica chunk",
+            extra={
+                "json_fields": {"event": "track_chunks_event_received", "data": data}
+            },
+        )
 
         operation = data.get("operation")
         if not operation:
-            raise KeyError("Missing 'operation' key in Pub/Sub message")
-        # if operation not in ["insert", "update"]:
-        if operation not in ["update"]:
+            raise ValueError("Empty 'operation' value in Pub/Sub message")
+        if operation != "update":
             raise ValueError(f"Unsupported operation: {operation}")
 
         values = data.get("values")
         if not values:
             raise ValueError("No 'values' key found in Pub/Sub message")
 
-        if "apdb_replica_chunk" not in data:
-            raise KeyError("Missing 'apdb_replica_chunk' in message")
+        chunk_id = data.get("apdb_replica_chunk")
+        if not chunk_id:
+            raise ValueError("No 'apdb_replica_chunk' value in Pub/Sub message")
 
-        chunk_id = data["apdb_replica_chunk"]
+        if operation != "update":
+            raise ValueError(f"Unsupported operation: {operation}")
 
-        if operation == "update":
-            update_count = ppdb.update(chunk_id, values)
-            if update_count == 0:
-                logging.warning(
-                    "No rows updated for replica chunk %d with values: %s",
-                    chunk_id,
-                    values,
-                )
-            else:
-                logging.info(
-                    "Updated replica chunk %d with values: %s (affected rows: %d)",
-                    chunk_id,
-                    values,
-                    update_count,
-                )
-        # elif operation == "insert":
-        #    db.insert(chunk_id, values)
+        chunk = ppdb.find_chunk_by_id(int(chunk_id))
+        if not chunk:
+            raise LookupError(f"Replica chunk {chunk_id} not found")
+
+        new_status = values.get("status")
+        if not new_status:
+            raise ValueError("Empty 'status' value in values for update operation")
+
+        update_count = ppdb.update_chunks(
+            [chunk.with_new_status(ChunkStatus(new_status))], {"status"}
+        )
+        if update_count < 1:
+            # This should not happen but raise an error just in case.
+            raise LookupError(
+                f"Failed to update replica chunk {chunk_id} with values: {values}"
+            )
+
+        logging.info(
+            "Updated replica chunk status",
+            extra={
+                "json_fields": {
+                    "event": "replica_chunk_status_updated",
+                    "chunk_id": chunk_id,
+                    "values": values,
+                    "affected_rows": update_count,
+                }
+            },
+        )
 
     except Exception:
-        logging.exception("Error processing Pub/Sub message")
+        logging.exception("Error processing Pub/Sub event")

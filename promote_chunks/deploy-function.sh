@@ -15,6 +15,6 @@ gcloud functions deploy promote-chunks \
   --trigger-http \
   --no-allow-unauthenticated \
   --service-account="${SERVICE_ACCOUNT_EMAIL}" \
-  --memory=4Gi \
+  --memory=16Gi \
   --timeout=900s \
   --set-env-vars "PPDB_CONFIG_URI=${PPDB_CONFIG_URI},PPDB_USE_SECRET_MANAGER=true"
