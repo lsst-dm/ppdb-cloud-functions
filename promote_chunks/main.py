@@ -22,17 +22,23 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import logging
+import os
 
 from flask import Request, jsonify
+from google.cloud import logging as cloud_logging
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.chunk_promoter import (
     ChunkPromoter,
     NoPromotableChunksError,
 )
-from lsst.dax.ppdbx.gcp.log_config import setup_logging
 
-# Configure cloud logging
-setup_logging()
+# Configure cloud logging.
+client = cloud_logging.Client()
+client.setup_logging()  # Redirects standard logging to Cloud Logging
+log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+logging.getLogger().setLevel(log_level)
+
 
 # Setup PPDB BigQuery interface from environment variable configuration
 ppdb = PpdbBigQuery.from_env()
