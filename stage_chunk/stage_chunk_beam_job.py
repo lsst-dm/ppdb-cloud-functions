@@ -39,7 +39,6 @@ from apache_beam.options.pipeline_options import (
 from google.cloud import logging as cloud_logging
 from google.cloud import pubsub_v1, storage
 from lsst.dax.ppdb.bigquery import Manifest
-from lsst.dax.ppdb.bigquery.updates import UpdateRecords
 
 # Configure Google Cloud logging
 cloud_logging.Client().setup_logging()
@@ -281,16 +280,8 @@ def run(argv: Optional[list[str]] = None) -> None:
 
     logging.info("Loading table files: %s", list(manifest.files))
 
-    # Filter out the update records file from the list of parquet files to be
-    # staged.
-    parquet_files = [
-        name
-        for name in manifest.files.keys()
-        if name != UpdateRecords.PARQUET_FILE_NAME
-    ]
-
     with apache_beam.Pipeline(options=options) as pipeline:
-        for file_name in parquet_files:
+        for file_name in manifest.files.keys():
             data = read_parquet(pipeline, folder, file_name)
 
             table_fqn = f"{project_id}:{dataset_id}.{Path(file_name).stem}"
