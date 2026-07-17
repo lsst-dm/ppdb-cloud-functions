@@ -27,10 +27,7 @@ import os
 from typing import Any
 
 from google.cloud import logging as cloud_logging
-from lsst.dax.ppdb.bigquery import (
-    ChunkStatus,
-    PpdbBigQuery,
-)
+from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery, UpdatableField
 
 # Configure cloud logging.
 client = cloud_logging.Client()
@@ -89,7 +86,7 @@ def track_chunk(event: dict[str, Any], context: Any) -> None:
             raise ValueError("Empty 'status' value in values for update operation")
 
         update_count = ppdb.update_chunks(
-            [chunk.with_new_status(ChunkStatus(new_status))], {"status"}
+            [chunk.with_new_status(ChunkStatus(new_status))], {UpdatableField.STATUS}
         )
         if update_count < 1:
             # This should not happen but raise an error just in case.
