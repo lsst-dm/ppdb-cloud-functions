@@ -209,6 +209,8 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         "dataflow_job_launching",
         dataflow_job_name=job_name,
         launch_parameters=launch_body["launchParameter"]["parameters"],
+        environment=launch_body["launchParameter"]["environment"],
+        container_spec_gcs_path=launch_body["launchParameter"]["containerSpecGcsPath"],
     )
 
     try:
