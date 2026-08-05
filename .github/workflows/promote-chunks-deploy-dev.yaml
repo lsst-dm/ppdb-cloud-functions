@@ -1,0 +1,50 @@
+name: Promote Chunk Cloud Run Deploy Dev
+
+on:
+  pull_request:
+    paths:
+      - 'promote_chunks/*.py'
+      - 'promote_chunks/requirements.txt'
+  push:
+    branches:
+      - main
+    paths:
+      - 'promote_chunks/*.py'
+      - 'promote_chunks/requirements.txt'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      PROJECT_ID: ${{ vars.GCP_DEV_PROJECT_ID }}
+      REGION: ${{ vars.GCP_DEV_REGION }}
+      SERVICE_NAME: promote-chunks
+      APP_SOURCE_PATH: promote_chunks
+      RUNTIME: 'python313'
+      ENTRY_POINT: 'promote_chunks'
+      CPU: ${{ vars.PROMOTE_CHUNKS_CPU }} 
+      MEMORY: ${{ vars.PROMOTE_CHUNKS_MEMORY }}
+      TIMEOUT: ${{ vars.PROMOTE_CHUNKS_TIMEOUT }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - id: 'auth'
+      name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@v3'
+      with:
+        credentials_json: ${{ secrets.GCP_CREDENTIALS_DEV }}
+
+    - name: 'Deploy to Cloud Run Functions'
+      uses: 'google-github-actions/deploy-cloud-functions@v4'
+      with:
+        name: ${{ env.SERVICE_NAME }}
+        region: ${{ env.REGION }}
+        source_dir: ${{ env.APP_SOURCE_PATH }}
+        runtime: ${{ env.RUNTIME }}
+        entry_point: ${{ env.ENTRY_POINT }}
+        cpu: ${{ env.CPU }}
+        memory: ${{ env.MEMORY }}
+        service_timeout: ${{ env.TIMEOUT }}
