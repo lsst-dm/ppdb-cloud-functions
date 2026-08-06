@@ -4,4 +4,4 @@ google-api-core
 google-api-python-client
 google-cloud-functions
 
-lsst-dax-ppdb @ git+https://github.com/lsst/dax_ppdb@main
+lsst-dax-ppdb @ git+https://github.com/lsst/dax_ppdb@cloudrun-v1.0.0
