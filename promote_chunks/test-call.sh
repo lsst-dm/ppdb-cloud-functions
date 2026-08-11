@@ -2,7 +2,7 @@
 set -euxo pipefail
 
 URL=$(gcloud functions describe promote-chunks \
-  --region=us-central1 \
+  --region=${REGION:-us-central1} \
   --gen2 \
   --format="value(serviceConfig.uri)")
 
