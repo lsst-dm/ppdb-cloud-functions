@@ -26,10 +26,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+import functions_framework
 import google.auth
+from cloudevents.http import CloudEvent
 from google.api_core.exceptions import GoogleAPICallError
 from google.cloud import logging as cloud_logging
-from google.cloud.functions_v1.context import Context
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -60,20 +61,20 @@ _dataflow_client = build(
 )
 
 
-def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
+@functions_framework.cloud_event
+def trigger_stage_chunk(event: CloudEvent) -> None:
     """Cloud Function to launch a Dataflow job to stage PPDB data.
 
     Parameters
     ----------
-    event : `dict`
-        The dictionary with data specific to this type of event. The `data`
-        field contains a base64-encoded string representing a JSON message
-        with `bucket`, `name` and `dataset` fields.
-    context : `google.cloud.functions.Context`
-        Metadata of triggering event including `event_id`.
+    cloud_event : `CloudEvent`
+        The CloudEvent delivered by the Pub/Sub trigger. The Pub/Sub message
+        is available at ``cloud_event.data["message"]`` and its ``data`` field
+        contains a base64-encoded string representing a JSON message with
+        ``dataset``, ``chunk_id`` and ``folder`` fields.
     """
     # Fields attached to every structured log entry for this invocation.
-    log_fields: dict[str, Any] = {"event_id": getattr(context, "event_id", None)}
+    log_fields: dict[str, Any] = {"event_id": event["id"]}
 
     def log_event(
         level: int,
@@ -123,14 +124,14 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         return retryable
 
     try:
-        message = base64.b64decode(event["data"]).decode("utf-8")
+        message = base64.b64decode(event.data["message"]["data"]).decode("utf-8")
     except Exception:
         log_event(
             logging.WARNING,
             "Malformed or missing Pub/Sub data payload",
             "malformed_pubsub_payload",
             exc_info=True,
-            pubsub_event=event,
+            pubsub_event=event.data,
         )
         return
 
@@ -208,6 +209,8 @@ def trigger_stage_chunk(event: dict[str, Any], context: Context) -> None:
         "dataflow_job_launching",
         dataflow_job_name=job_name,
         launch_parameters=launch_body["launchParameter"]["parameters"],
+        environment=launch_body["launchParameter"]["environment"],
+        container_spec_gcs_path=launch_body["launchParameter"]["containerSpecGcsPath"],
     )
 
     try:
