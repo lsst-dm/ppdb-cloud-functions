@@ -23,25 +23,22 @@
 
 import logging
 import os
-
-from google.cloud import logging as cloud_logging
+from google.cloud.logging.handlers import StructuredLogHandler
+from google.cloud.logging_v2.handlers.container_engine import ContainerEngineHandler
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.chunk_promoter import (
     ChunkPromoter,
+    ChunkPromotionError,
     NoPromotableChunksError,
 )
 
-# Configure cloud logging.
-client = cloud_logging.Client()
-client.setup_logging()  # Redirects standard logging to Cloud Logging
-log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
-log_level = getattr(logging, log_level_str, logging.INFO)
-logging.getLogger().setLevel(log_level)
-
-
-# Setup PPDB BigQuery interface from environment variable configuration
-ppdb = PpdbBigQuery.from_env()
-
+def setup_logging():
+    # Set up stdout structured logging
+    handler = StructuredLogHandler()
+    
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(handler)
 
 def promote_chunks():
 
@@ -57,14 +54,20 @@ def promote_chunks():
         # This is not a real error condition. It just means there are no chunks
         # ready for promotion. It is easiest to catch this as an exception.
         logging.info("No promotable chunks found: %s", str(e))
-
-    except Exception as e:
+    except ChunkPromotionError as e:
         # Some error occurred during the promotion process.
-        logging.exception("Error during chunk promotion")
+        logging.exception("Error during chunk promotion: %s", str(e))
+        raise
+    except Exception as e:
+        logging.exception("Unexpected error while promoting chunks: %s", str(e))
         raise
 
     # Promotion succeeded! Return the number of chunks promoted.
-    logging.info("%s, Chunks Promoted", str(chunk_count))
+    logging.info("Chunks promoted: %s", str(chunk_count))
 
 if __name__ == "__main__":
+    setup_logging()
+    logging.info("Promote Chunks Job starting")
+    # Setup PPDB BigQuery interface from environment variable configuration
+    ppdb = PpdbBigQuery.from_env()
     promote_chunks()
