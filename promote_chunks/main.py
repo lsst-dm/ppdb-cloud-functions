@@ -24,7 +24,6 @@
 import logging
 import os
 
-from flask import Request, jsonify
 from google.cloud import logging as cloud_logging
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.chunk_promoter import (
@@ -44,45 +43,13 @@ logging.getLogger().setLevel(log_level)
 ppdb = PpdbBigQuery.from_env()
 
 
-def promote_chunks(request: Request):
-    """Promotes APDB replica chunks into production that have been copied into
-    staging tables by the ``ChunkUploader`. Only chunks that are staged and
-    have all prior chunks promoted will be considered for promotion.
-
-    Parameters
-    ----------
-    request : `Request`
-        The Flask request object containing the payload for promotion. This
-        will typically be empty as the promotion is based on the current state
-        of the database.
-
-    Returns
-    -------
-    response: `Response`
-        A JSON response indicating the success or failure of the promotion.
-        This will include the number of chunks promoted and any error messages,
-        if applicable.
-    """
-    dry_run = request.args.get("dry_run", "false").lower() == "true"
+def promote_chunks():
 
     promotable_chunks = ppdb.get_promotable_chunks()
     chunk_count = len(promotable_chunks)
     logging.info("Found %d promotable chunks", chunk_count)
 
-    # Execute dry run if requested and just print the number of promotable
-    # chunks without making any changes.
-    if dry_run:
-        logging.info("Dry run mode enabled - promotion will not be executed")
-        return jsonify(
-            {
-                "ok": True,
-                "mode": "dry_run",
-                "chunks_promoted": 0,
-                "promotable_chunk_count": chunk_count,
-            }
-        ), 200
-
-    # Promote the chunks and return the number promoted.
+    # Promote the chunks and log the number promoted.
     try:
         promoter = ChunkPromoter(ppdb)
         promoter.promote_chunks(promotable_chunks)
@@ -90,19 +57,14 @@ def promote_chunks(request: Request):
         # This is not a real error condition. It just means there are no chunks
         # ready for promotion. It is easiest to catch this as an exception.
         logging.info("No promotable chunks found: %s", str(e))
-        return jsonify(
-            {"ok": True, "message": "No promotable chunks found", "chunks_promoted": 0}
-        ), 200
+
     except Exception as e:
         # Some error occurred during the promotion process.
         logging.exception("Error during chunk promotion")
-        return jsonify({"ok": False, "error": str(e), "chunks_promoted": 0}), 500
+        raise
 
     # Promotion succeeded! Return the number of chunks promoted.
-    return jsonify(
-        {
-            "ok": True,
-            "mode": "execute",
-            "chunks_promoted": chunk_count,
-        }
-    ), 200
+    logging.info("%s, Chunks Promoted", str(chunk_count))
+
+if __name__ == "__main__":
+    promote_chunks()
