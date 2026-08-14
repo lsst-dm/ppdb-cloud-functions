@@ -51,6 +51,7 @@ REGION = os.environ["REGION"]
 SERVICE_ACCOUNT_EMAIL = os.environ["SERVICE_ACCOUNT_EMAIL"]
 TEMP_LOCATION = os.environ["TEMP_LOCATION"]
 TOPIC_NAME = os.environ["TOPIC_NAME"]
+GOOGLE_CLOUD_SUBNETWORK = os.environ.get("GOOGLE_CLOUD_SUBNETWORK")
 
 _credentials, _ = google.auth.default()
 _dataflow_client = build(
@@ -199,6 +200,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             "environment": {
                 "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
                 "tempLocation": TEMP_LOCATION,
+                "subnetwork": GOOGLE_CLOUD_SUBNETWORK,
             },
         }
     }
