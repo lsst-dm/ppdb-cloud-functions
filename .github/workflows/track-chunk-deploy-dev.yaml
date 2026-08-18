@@ -1,4 +1,4 @@
-name: Track Chunk Cloud Run Deploy Dev
+name: Dev - Track Chunk Cloud Run Deploy
 
 on:
   pull_request:
@@ -20,7 +20,7 @@ jobs:
 
     env:
       PROJECT_ID: ${{ vars.GCP_DEV_PROJECT_ID }}
-      REGION: ${{ vars.GCP_DEV_REGION }}
+      REGION: ${{ vars.GCP_REGION }}
       SERVICE_NAME: track-chunk
       APP_SOURCE_PATH: track_chunk
       RUNTIME: 'python313'

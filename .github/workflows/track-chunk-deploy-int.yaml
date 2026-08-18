@@ -1,33 +1,23 @@
-name: Dev - Stage Chunk Cloud Run Deploy
+name: Int - Track Chunk Cloud Run Deploy
 
 on:
-  pull_request:
-    paths:
-      - 'stage_chunk/main.py'
-      - 'stage_chunk/requirements.txt'
-  push:
-    branches:
-      - main
-    paths:
-      - 'stage_chunk/*.py'
-      - 'stage_chunk/requirements.txt'
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: dev/stage-chunk
+    environment: int/track-chunk
 
     env:
-      PROJECT_ID: ${{ vars.GCP_DEV_PROJECT_ID }}
+      PROJECT_ID: ${{ vars.GCP_INT_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION }}
-      SERVICE_NAME: trigger-stage-chunk
-      APP_SOURCE_PATH: stage_chunk
+      SERVICE_NAME: track-chunk
+      APP_SOURCE_PATH: track_chunk
       RUNTIME: 'python313'
-      ENTRY_POINT: 'trigger_stage_chunk'
-      CPU: ${{ vars.TRIGGER_STAGE_CHUNK_CPU }}
-      MEMORY: ${{ vars.TRIGGER_STAGE_CHUNK_MEMORY }}
-      TIMEOUT: ${{ vars.TRIGGER_STAGE_CHUNK_TIMEOUT }}
+      ENTRY_POINT: 'track_chunk'
+      CPU: ${{ vars.TRACK_CHUNK_CPU }}
+      MEMORY: ${{ vars.TRACK_CHUNK_MEMORY }}
+      TIMEOUT: ${{ vars.TRACK_CHUNK_TIMEOUT }}
 
     steps:
       - name: Checkout code
@@ -37,7 +27,7 @@ jobs:
         name: 'Authenticate to Google Cloud'
         uses: 'google-github-actions/auth@v3'
         with:
-          credentials_json: ${{ secrets.GCP_CREDENTIALS_DEV }}
+          credentials_json: ${{ secrets.GCP_CREDENTIALS }}
 
       - name: 'Deploy to Cloud Run Functions'
         uses: 'google-github-actions/deploy-cloud-functions@v4'
