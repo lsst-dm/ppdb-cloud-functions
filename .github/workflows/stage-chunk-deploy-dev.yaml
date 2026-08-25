@@ -16,6 +16,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: dev/stage-chunk
 
     env:
       PROJECT_ID: ${{ vars.GCP_DEV_PROJECT_ID }}
