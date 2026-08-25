@@ -11,10 +11,12 @@ on:
     paths:
       - 'stage_chunk/*.py'
       - 'stage_chunk/requirements.txt'
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: dev/stage-chunk
 
     env:
       PROJECT_ID: ${{ vars.GCP_DEV_PROJECT_ID }}
@@ -27,25 +29,24 @@ jobs:
       MEMORY: ${{ vars.TRIGGER_STAGE_CHUNK_MEMORY }}
       TIMEOUT: ${{ vars.TRIGGER_STAGE_CHUNK_TIMEOUT }}
 
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v7
+      - name: Checkout code
+        uses: actions/checkout@v7
 
-    - id: 'auth'
-      name: 'Authenticate to Google Cloud'
-      uses: 'google-github-actions/auth@v3'
-      with:
-        credentials_json: ${{ secrets.GCP_CREDENTIALS_DEV }}
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v3'
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_DEV }}
 
-    - name: 'Deploy to Cloud Run Functions'
-      uses: 'google-github-actions/deploy-cloud-functions@v4'
-      with:
-        name: ${{ env.SERVICE_NAME }}
-        region: ${{ env.REGION }}
-        source_dir: ${{ env.APP_SOURCE_PATH }}
-        runtime: ${{ env.RUNTIME }}
-        entry_point: ${{ env.ENTRY_POINT }}
-        cpu: ${{ env.CPU }}
-        memory: ${{ env.MEMORY }}
-        service_timeout: ${{ env.TIMEOUT }}
+      - name: 'Deploy to Cloud Run Functions'
+        uses: 'google-github-actions/deploy-cloud-functions@v4'
+        with:
+          name: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          source_dir: ${{ env.APP_SOURCE_PATH }}
+          runtime: ${{ env.RUNTIME }}
+          entry_point: ${{ env.ENTRY_POINT }}
+          cpu: ${{ env.CPU }}
+          memory: ${{ env.MEMORY }}
+          service_timeout: ${{ env.TIMEOUT }}

@@ -13,10 +13,13 @@ on:
       - 'stage_chunk/Dockerfile'
       - 'stage_chunk/stage_chunk_beam_job.py'
       - 'stage_chunk/requirements-dataflow.txt'
+  workflow_dispatch:
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    environment: dev/stage-chunk-dataflow
+
     defaults:
       run:
         shell: bash
