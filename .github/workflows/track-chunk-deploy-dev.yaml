@@ -11,7 +11,7 @@ on:
     paths:
       - 'track_chunk/*.py'
       - 'track_chunk/requirements.txt'
-    workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
   deploy:
