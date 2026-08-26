@@ -21,6 +21,7 @@
 
 import argparse
 import logging
+import math
 import posixpath
 import uuid
 from typing import Any
@@ -116,6 +117,14 @@ def read_parquet(
     return pipeline | f"Read{table_name}" >> ReadFromParquet(parquet_path)
 
 
+def sanitize_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Replace non-JSON-compliant NaN/Infinity float values with None."""
+    return {
+        key: None if isinstance(value, float) and not math.isfinite(value) else value
+        for key, value in row.items()
+    }
+
+
 def write_to_bigquery(
     pcoll: apache_beam.PCollection,
     table_fqn: str,
@@ -128,11 +137,43 @@ def write_to_bigquery(
         "writing_to_bigquery",
         table_fqn=table_fqn,
     )
-    return pcoll | f"Write{table_fqn}" >> WriteToBigQuery(
-        table=table_fqn,
-        create_disposition=BigQueryDisposition.CREATE_IF_NEEDED,
-        write_disposition=BigQueryDisposition.WRITE_TRUNCATE,
-        custom_gcs_temp_location=temp_location,
+    return (
+        pcoll
+        | f"Sanitize{table_fqn}" >> apache_beam.Map(sanitize_row)
+        | f"Write{table_fqn}"
+        >> WriteToBigQuery(
+            table=table_fqn,
+            create_disposition=BigQueryDisposition.CREATE_NEVER,
+            write_disposition=BigQueryDisposition.WRITE_TRUNCATE,
+            custom_gcs_temp_location=temp_location,
+        )
+    )
+
+
+def create_staging_table(
+    bq_client: bigquery.Client, staging_ref: str, internal_ref: str, table_name: str
+) -> None:
+    """Create an empty staging table with the internal table's schema."""
+    log_event(
+        logging.INFO,
+        "Creating staging table",
+        "creating_staging_table",
+        table_name=table_name,
+        staging_ref=staging_ref,
+        internal_ref=internal_ref,
+    )
+
+    # Create the staging table with the same schema as the internal table.
+    internal_table = bq_client.get_table(internal_ref)
+    staging_table = bigquery.Table(staging_ref, schema=internal_table.schema)
+    bq_client.create_table(staging_table)
+
+    log_event(
+        logging.INFO,
+        "Created staging table",
+        "created_staging_table",
+        table_name=table_name,
+        staging_ref=staging_ref,
     )
 
 
@@ -229,6 +270,16 @@ def run(argv: list[str] | None = None) -> None:
 
     bq_client = bigquery.Client(project=project_id)
     try:
+        # Create each staging table up front, with the internal table's schema,
+        # so the load jobs below can target a table that already exists and
+        # reject data whose schema doesn't match.
+        for table_name in tables:
+            staging_ref = (
+                f"{project_id}.{staging_dataset_id}.{staging_table_names[table_name]}"
+            )
+            internal_ref = f"{project_id}.{internal_dataset_id}.{table_name}"
+            create_staging_table(bq_client, staging_ref, internal_ref, table_name)
+
         # Write the data from each parquet file to its temporary staging table.
         with apache_beam.Pipeline(options=options) as pipeline:
             for table_name in tables:
