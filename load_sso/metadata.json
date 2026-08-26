@@ -1,0 +1,34 @@
+{
+    "name": "Load SSO Beam Job",
+    "description": "Loads SSO parquet tables into BigQuery",
+    "parameters": [
+      {
+        "name": "bucket",
+        "label": "GCS bucket",
+        "helpText": "GCS bucket containing the SSO Parquet files",
+        "paramType": "TEXT",
+        "isOptional": false
+      },
+      {
+        "name": "object_prefix",
+        "label": "GCS object prefix",
+        "helpText": "GCS object prefix containing the SSO Parquet files",
+        "paramType": "TEXT",
+        "isOptional": false
+      },
+      {
+        "name": "dataset_id",
+        "label": "BigQuery dataset ID",
+        "helpText": "Target BigQuery dataset",
+        "paramType": "TEXT",
+        "isOptional": false
+      },
+      {
+        "name": "tables",
+        "label": "SSO table names",
+        "helpText": "Comma-separated list of SSO table names to load",
+        "paramType": "TEXT",
+        "isOptional": false
+      }
+    ]
+  }
