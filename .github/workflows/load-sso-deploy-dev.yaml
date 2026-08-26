@@ -1,0 +1,55 @@
+name: Dev - Load SSO Cloud Run Deploy
+
+# TODO: Automatic triggers are disabled for now; use workflow_dispatch until
+# this workflow is ready to run automatically.
+on:
+  # pull_request:
+  #   paths:
+  #     - 'load_sso/main.py'
+  #     - 'load_sso/requirements.txt'
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - 'load_sso/*.py'
+  #     - 'load_sso/requirements.txt'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev/load-sso
+
+    env:
+      PROJECT_ID: ${{ vars.GCP_DEV_PROJECT_ID }}
+      REGION: ${{ vars.GCP_DEV_REGION }}
+      SERVICE_NAME: load-sso
+      APP_SOURCE_PATH: load_sso
+      RUNTIME: 'python313'
+      ENTRY_POINT: 'load_sso'
+      CPU: ${{ vars.LOAD_SSO_CPU }}
+      MEMORY: ${{ vars.LOAD_SSO_MEMORY }}
+      TIMEOUT: ${{ vars.LOAD_SSO_TIMEOUT }}
+
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - id: 'auth'
+      name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@v3'
+      with:
+        credentials_json: ${{ secrets.GCP_CREDENTIALS_DEV }}
+
+    - name: 'Deploy to Cloud Run Functions'
+      uses: 'google-github-actions/deploy-cloud-functions@v4'
+      with:
+        name: ${{ env.SERVICE_NAME }}
+        region: ${{ env.REGION }}
+        source_dir: ${{ env.APP_SOURCE_PATH }}
+        runtime: ${{ env.RUNTIME }}
+        entry_point: ${{ env.ENTRY_POINT }}
+        cpu: ${{ env.CPU }}
+        memory: ${{ env.MEMORY }}
+        service_timeout: ${{ env.TIMEOUT }}
