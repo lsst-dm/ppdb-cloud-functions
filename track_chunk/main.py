@@ -24,8 +24,9 @@ import binascii
 import json
 import logging
 import os
-from typing import Any
 
+import functions_framework
+from cloudevents.http import CloudEvent
 from google.cloud import logging as cloud_logging
 from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery, UpdatableField
 
@@ -41,10 +42,11 @@ logging.getLogger().setLevel(log_level)
 ppdb = PpdbBigQuery.from_env()
 
 
-def track_chunk(event: dict[str, Any], context: Any) -> None:
+@functions_framework.cloud_event
+def track_chunk(event: CloudEvent) -> None:
     try:
         try:
-            message = base64.b64decode(event["data"]).decode("utf-8")
+            message = base64.b64decode(event.data["message"]["data"]).decode("utf-8")
         except (KeyError, binascii.Error, UnicodeDecodeError) as e:
             raise Exception("Malformed or missing Pub/Sub data payload") from e
 
