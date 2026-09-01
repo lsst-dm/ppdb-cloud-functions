@@ -1,1 +1,3 @@
+functions-framework
+
 lsst-dax-ppdb @ git+https://github.com/lsst/dax_ppdb@cloudrun-v1.0.0
