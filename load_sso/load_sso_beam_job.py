@@ -136,7 +136,7 @@ def write_to_bigquery(
     )
 
 
-def swap_internal_table(
+def copy_staging_to_internal(
     bq_client: bigquery.Client, staging_ref: str, internal_ref: str, table_name: str
 ) -> None:
     """Copy a staging table over its target table in the internal dataset."""
@@ -150,7 +150,7 @@ def swap_internal_table(
     )
 
     # This job should fail if the schemas of the staging and internal tables
-    # don't match.
+    # do not match, which is the desired behavior.
     copy_job_config = bigquery.CopyJobConfig(
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
     )
@@ -227,32 +227,34 @@ def run(argv: list[str] | None = None) -> None:
     token = uuid.uuid4().hex
     staging_table_names = {table_name: f"{table_name}_{token}" for table_name in tables}
 
-    # Write the data from each parquet file to its temporary staging table.
-    with apache_beam.Pipeline(options=options) as pipeline:
-        for table_name in tables:
-            data = read_parquet(pipeline, bucket, object_prefix, table_name)
-
-            staging_table_fqn = (
-                f"{project_id}:{staging_dataset_id}.{staging_table_names[table_name]}"
-            )
-
-            write_to_bigquery(
-                data,
-                staging_table_fqn,
-                temp_location,
-            )
-
     bq_client = bigquery.Client(project=project_id)
     try:
+        # Write the data from each parquet file to its temporary staging table.
+        with apache_beam.Pipeline(options=options) as pipeline:
+            for table_name in tables:
+                data = read_parquet(pipeline, bucket, object_prefix, table_name)
+
+                staging_table_fqn = (
+                    f"{project_id}:{staging_dataset_id}."
+                    f"{staging_table_names[table_name]}"
+                )
+
+                write_to_bigquery(
+                    data,
+                    staging_table_fqn,
+                    temp_location,
+                )
+
         # Copy each temporary staging table to the internal table in BigQuery.
         for table_name in tables:
             staging_ref = (
                 f"{project_id}.{staging_dataset_id}.{staging_table_names[table_name]}"
             )
             internal_ref = f"{project_id}.{internal_dataset_id}.{table_name}"
-            swap_internal_table(bq_client, staging_ref, internal_ref, table_name)
+            copy_staging_to_internal(bq_client, staging_ref, internal_ref, table_name)
     finally:
-        # Delete each temporary staging table in BigQuery.
+        # Delete each temporary staging table in BigQuery, including any
+        # left behind by a pipeline failure.
         for table_name in tables:
             staging_ref = (
                 f"{project_id}.{staging_dataset_id}.{staging_table_names[table_name]}"
