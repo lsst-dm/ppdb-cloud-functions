@@ -1,18 +1,16 @@
 name: Dev - Load SSO Cloud Run Deploy
 
-# TODO: Automatic triggers are disabled for now; use workflow_dispatch until
-# this workflow is ready to run automatically.
 on:
-  # pull_request:
-  #   paths:
-  #     - 'load_sso/main.py'
-  #     - 'load_sso/requirements.txt'
-  # push:
-  #   branches:
-  #     - main
-  #   paths:
-  #     - 'load_sso/*.py'
-  #     - 'load_sso/requirements.txt'
+  pull_request:
+    paths:
+      - 'load_sso/main.py'
+      - 'load_sso/requirements.txt'
+  push:
+    branches:
+      - main
+    paths:
+      - 'load_sso/*.py'
+      - 'load_sso/requirements.txt'
   workflow_dispatch:
 
 jobs:

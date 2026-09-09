@@ -1,20 +1,18 @@
 name: Dev - Load SSO Dataflow Push to Artifact Registry and Flex Template Upload
 
-# TODO: Automatic triggers are disabled for now; use workflow_dispatch until
-# this workflow is ready to run automatically.
 on:
-  # pull_request:
-  #   paths:
-  #     - 'load_sso/Dockerfile'
-  #     - 'load_sso/load_sso_beam_job.py'
-  #     - 'load_sso/requirements-dataflow.txt'
-  # push:
-  #   branches:
-  #     - main
-  #   paths:
-  #     - 'load_sso/Dockerfile'
-  #     - 'load_sso/load_sso_beam_job.py'
-  #     - 'load_sso/requirements-dataflow.txt'
+  pull_request:
+    paths:
+      - 'load_sso/Dockerfile'
+      - 'load_sso/load_sso_beam_job.py'
+      - 'load_sso/requirements-dataflow.txt'
+  push:
+    branches:
+      - main
+    paths:
+      - 'load_sso/Dockerfile'
+      - 'load_sso/load_sso_beam_job.py'
+      - 'load_sso/requirements-dataflow.txt'
   workflow_dispatch:
 
 jobs:
