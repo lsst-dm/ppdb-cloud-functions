@@ -23,7 +23,6 @@ import base64
 import json
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any
 
 import functions_framework
@@ -98,15 +97,21 @@ def load_sso(event: CloudEvent) -> None:
     def handle_error(e: Exception) -> bool:
         """Log a job-submission failure and report whether it is retryable."""
         extra_fields: dict[str, Any] = {}
+        job_already_active = isinstance(e, HttpError) and e.resp.status == 409
         if isinstance(e, HttpError):
-            retryable = e.resp.status in (429, 500, 503)
+            retryable = e.resp.status in (409, 429, 500, 503)
             extra_fields["http_status"] = e.resp.status
         elif isinstance(e, GoogleAPICallError):
             retryable = True
         else:
             retryable = False
 
-        if retryable:
+        if job_already_active:
+            # Dataflow rejects launches while a job with the same name is active.
+            level = logging.INFO
+            log_message = "Dataflow job already active"
+            event_name = "dataflow_job_already_active"
+        elif retryable:
             level = logging.WARNING
             log_message = "Retryable error during job submission"
             event_name = "retryable_error"
@@ -197,8 +202,10 @@ def load_sso(event: CloudEvent) -> None:
         internal_dataset_id=internal_dataset_id,
     )
 
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
-    job_name = f"load-sso-{timestamp}"
+    # A fixed job name is used to ensure that only one Load SSO job may be
+    # active at once. Dataflow will reject launches if a job with the same name
+    # is already running.
+    job_name = "load-sso"
 
     launch_body = {
         "launchParameter": {
