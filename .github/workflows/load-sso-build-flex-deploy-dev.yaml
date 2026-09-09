@@ -27,7 +27,7 @@ jobs:
     env:
       PROJECT_ID: ${{ vars.GCP_DEV_PROJECT_ID }}
       ENVIRONMENT: dev
-      GAR_LOCATION: ${{ vars.GCP_DEV_REGION }}
+      GAR_LOCATION: ${{ vars.GCP_REGION }}
       REPOSITORY: ppdb-repo
       IMAGE: load-sso-image
 

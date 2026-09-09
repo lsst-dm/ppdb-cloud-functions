@@ -20,7 +20,7 @@ jobs:
 
     env:
       PROJECT_ID: ${{ vars.GCP_DEV_PROJECT_ID }}
-      REGION: ${{ vars.GCP_DEV_REGION }}
+      REGION: ${{ vars.GCP_REGION }}
       SERVICE_NAME: load-sso
       APP_SOURCE_PATH: load_sso
       RUNTIME: 'python313'
@@ -28,7 +28,6 @@ jobs:
       CPU: ${{ vars.LOAD_SSO_CPU }}
       MEMORY: ${{ vars.LOAD_SSO_MEMORY }}
       TIMEOUT: ${{ vars.LOAD_SSO_TIMEOUT }}
-
 
     steps:
     - name: Checkout code
