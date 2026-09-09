@@ -17,16 +17,23 @@
         "isOptional": false
       },
       {
-        "name": "dataset_id",
-        "label": "BigQuery dataset ID",
-        "helpText": "Target BigQuery dataset",
+        "name": "tables",
+        "label": "SSO table names",
+        "helpText": "Comma-separated list of SSO table names to load",
         "paramType": "TEXT",
         "isOptional": false
       },
       {
-        "name": "tables",
-        "label": "SSO table names",
-        "helpText": "Comma-separated list of SSO table names to load",
+        "name": "staging_dataset_id",
+        "label": "Staging BigQuery dataset ID",
+        "helpText": "BigQuery dataset ID for staging tables",
+        "paramType": "TEXT",
+        "isOptional": false
+      },
+      {
+        "name": "internal_dataset_id",
+        "label": "Internal BigQuery dataset ID",
+        "helpText": "BigQuery dataset ID for internal tables",
         "paramType": "TEXT",
         "isOptional": false
       }

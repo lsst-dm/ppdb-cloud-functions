@@ -22,6 +22,7 @@
 import argparse
 import logging
 import posixpath
+import uuid
 from typing import Any
 
 import apache_beam
@@ -33,6 +34,8 @@ from apache_beam.options.pipeline_options import (
     PipelineOptions,
     SetupOptions,
 )
+from google.api_core.exceptions import GoogleAPICallError
+from google.cloud import bigquery
 from google.cloud import logging as cloud_logging
 
 # Configure Google Cloud logging
@@ -45,13 +48,7 @@ class BeamSuppressUpdateDestinationSchemaWarning(logging.Filter):
     """Suppresses the UpdateDestinationSchema warning from Apache Beam."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """Suppress the UpdateDestinationSchema warning.
-
-        Parameters
-        ----------
-        record : `logging.LogRecord`
-            The log record to filter.
-        """
+        """Suppress the UpdateDestinationSchema warning."""
         if record.name == "apache_beam.transforms.core":
             message = str(record.getMessage())
             if "No iterator is returned by the process method" in message:
@@ -74,14 +71,7 @@ class CustomOptions(PipelineOptions):
 
     @classmethod
     def _add_argparse_args(cls, parser: argparse.ArgumentParser) -> None:
-        """Add custom arguments to the parser.
-
-        Parameters
-        ----------
-        parser : `argparse.ArgumentParser`
-            The argument parser to add arguments to.
-        """
-        parser.add_argument("--dataset_id", required=True, help="BigQuery dataset ID")
+        """Add custom arguments to the parser."""
         parser.add_argument(
             "--bucket",
             required=True,
@@ -97,29 +87,22 @@ class CustomOptions(PipelineOptions):
             required=True,
             help="Comma-separated list of SSO table names to load",
         )
+        parser.add_argument(
+            "--staging_dataset_id",
+            required=True,
+            help="BigQuery dataset ID for staging tables",
+        )
+        parser.add_argument(
+            "--internal_dataset_id",
+            required=True,
+            help="BigQuery dataset ID for internal tables",
+        )
 
 
 def read_parquet(
     pipeline: apache_beam.Pipeline, bucket: str, object_prefix: str, table_name: str
 ) -> PCollection:
-    """Read a Parquet file from GCS.
-
-    Parameters
-    ----------
-    pipeline : `apache_beam.Pipeline`
-        The Apache Beam pipeline.
-    bucket : `str`
-        The GCS bucket containing the Parquet file.
-    object_prefix : `str`
-        The GCS object prefix containing the Parquet file.
-    table_name : `str`
-        The name of the SSO table to read.
-
-    Returns
-    -------
-    transform: `apache_beam.PTransform`
-        The transform to read the Parquet file.
-    """
+    """Read a Parquet file from Google Cloud Storage."""
     parquet_path = (
         f"gs://{posixpath.join(bucket, object_prefix, f'{table_name}.parquet')}"
     )
@@ -138,34 +121,74 @@ def write_to_bigquery(
     table_fqn: str,
     temp_location: str,
 ) -> PCollection:
-    """Write PCollection to BigQuery.
-
-    Parameters
-    ----------
-    pcoll : `apache_beam.PCollection`
-        The PCollection to write to BigQuery.
-    table_fqn : `str`
-        The fully qualified name of the BigQuery table in the format `project_id:dataset_id.table_name`.
-    temp_location : `str`
-        The GCS path for temporary files.
-
-    Returns
-    -------
-    transform: `apache_beam.PTransform`
-        The transform to write the PCollection to BigQuery.
-    """
+    """Write PCollection to a target BigQuery table."""
     log_event(
         logging.INFO,
         "Writing to BigQuery table",
         "writing_to_bigquery",
         table_fqn=table_fqn,
     )
-    # SSO tables are fully replaced on every run, not incrementally appended.
     return pcoll | f"Write{table_fqn}" >> WriteToBigQuery(
         table=table_fqn,
-        create_disposition=BigQueryDisposition.CREATE_NEVER,
+        create_disposition=BigQueryDisposition.CREATE_IF_NEEDED,
         write_disposition=BigQueryDisposition.WRITE_TRUNCATE,
         custom_gcs_temp_location=temp_location,
+    )
+
+
+def swap_internal_table(
+    bq_client: bigquery.Client, staging_ref: str, internal_ref: str, table_name: str
+) -> None:
+    """Copy a staging table over its target table in the internal dataset."""
+    log_event(
+        logging.INFO,
+        "Swapping staging table into internal dataset",
+        "swapping_staging_to_internal",
+        table_name=table_name,
+        staging_ref=staging_ref,
+        internal_ref=internal_ref,
+    )
+
+    # This job should fail if the schemas of the staging and internal tables
+    # don't match.
+    copy_job_config = bigquery.CopyJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+    )
+    job = bq_client.copy_table(staging_ref, internal_ref, job_config=copy_job_config)
+    job.result()
+
+    log_event(
+        logging.INFO,
+        "Swapped staging table into internal dataset",
+        "swapped_staging_to_internal",
+        table_name=table_name,
+        internal_ref=internal_ref,
+    )
+
+
+def delete_staging_table(
+    bq_client: bigquery.Client, staging_ref: str, table_name: str
+) -> None:
+    """Delete a staging table, logging (rather than raising) on failure."""
+    try:
+        bq_client.delete_table(staging_ref, not_found_ok=True)
+    except GoogleAPICallError as e:
+        log_event(
+            logging.ERROR,
+            "Failed to delete staging table",
+            "delete_staging_table_failed",
+            table_name=table_name,
+            staging_ref=staging_ref,
+            error=str(e),
+        )
+        return
+
+    log_event(
+        logging.INFO,
+        "Deleted staging table",
+        "deleted_staging_table",
+        table_name=table_name,
+        staging_ref=staging_ref,
     )
 
 
@@ -181,7 +204,9 @@ def run(argv: list[str] | None = None) -> None:
     if not temp_location:
         raise ValueError("GCP temp_location must be set in pipeline options.")
 
-    dataset_id = custom_options.dataset_id
+    project_id = gcp_options.project
+    staging_dataset_id = custom_options.staging_dataset_id
+    internal_dataset_id = custom_options.internal_dataset_id
     bucket = custom_options.bucket
     object_prefix = custom_options.object_prefix
     tables = custom_options.tables.split(",")
@@ -193,25 +218,46 @@ def run(argv: list[str] | None = None) -> None:
         tables=tables,
         bucket=bucket,
         object_prefix=object_prefix,
-        dataset_id=dataset_id,
+        staging_dataset_id=staging_dataset_id,
+        internal_dataset_id=internal_dataset_id,
     )
 
-    if ":" in dataset_id:
-        project_id, dataset_id = dataset_id.split(":", 1)
-    else:
-        project_id = gcp_options.project
+    # Generate a unique suffix for each temporary staging table to avoid name
+    # collisions.
+    token = uuid.uuid4().hex
+    staging_table_names = {table_name: f"{table_name}_{token}" for table_name in tables}
 
+    # Write the data from each parquet file to its temporary staging table.
     with apache_beam.Pipeline(options=options) as pipeline:
         for table_name in tables:
             data = read_parquet(pipeline, bucket, object_prefix, table_name)
 
-            table_fqn = f"{project_id}:{dataset_id}.{table_name}"
+            staging_table_fqn = (
+                f"{project_id}:{staging_dataset_id}.{staging_table_names[table_name]}"
+            )
 
             write_to_bigquery(
                 data,
-                table_fqn,
+                staging_table_fqn,
                 temp_location,
             )
+
+    bq_client = bigquery.Client(project=project_id)
+    try:
+        # Copy each temporary staging table to the internal table in BigQuery.
+        for table_name in tables:
+            staging_ref = (
+                f"{project_id}.{staging_dataset_id}.{staging_table_names[table_name]}"
+            )
+            internal_ref = f"{project_id}.{internal_dataset_id}.{table_name}"
+            swap_internal_table(bq_client, staging_ref, internal_ref, table_name)
+    finally:
+        # Delete each temporary staging table in BigQuery.
+        for table_name in tables:
+            staging_ref = (
+                f"{project_id}.{staging_dataset_id}.{staging_table_names[table_name]}"
+            )
+            delete_staging_table(bq_client, staging_ref, table_name)
 
 
 if __name__ == "__main__":

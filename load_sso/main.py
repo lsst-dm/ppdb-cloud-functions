@@ -53,6 +53,8 @@ REGION = os.environ["REGION"]
 SERVICE_ACCOUNT_EMAIL = os.environ["SERVICE_ACCOUNT_EMAIL"]
 TEMP_LOCATION = os.environ["TEMP_LOCATION"]
 GOOGLE_CLOUD_SUBNETWORK = os.environ["GOOGLE_CLOUD_SUBNETWORK"]
+STAGING_DATASET_ID = os.environ["STAGING_DATASET_ID"]
+INTERNAL_DATASET_ID = os.environ["INTERNAL_DATASET_ID"]
 
 _credentials, _ = google.auth.default()
 _dataflow_client = build(
@@ -128,7 +130,7 @@ def load_sso(event: CloudEvent) -> None:
 
     try:
         message = base64.b64decode(event.data["message"]["data"]).decode("utf-8")
-    except Exception:
+    except (KeyError, TypeError, ValueError):
         log_event(
             logging.WARNING,
             "Malformed or missing Pub/Sub data payload",
@@ -163,7 +165,6 @@ def load_sso(event: CloudEvent) -> None:
         bucket = data["bucket"]
         object_prefix = data["object_prefix"]
         uploaded_tables = data["uploaded_tables"]
-        dataset_id = data["dataset_id"]
     except KeyError:
         log_event(
             logging.WARNING,
@@ -172,15 +173,12 @@ def load_sso(event: CloudEvent) -> None:
             exc_info=True,
             missing_keys=[
                 key
-                for key in ["bucket", "object_prefix", "uploaded_tables", "dataset_id"]
+                for key in ["bucket", "object_prefix", "uploaded_tables"]
                 if key not in data
             ],
             pubsub_message=data,
         )
         return
-
-    # Attach the correlation identifiers to all subsequent logs.
-    log_fields.update(dataset=dataset_id)
 
     log_event(
         logging.INFO,
@@ -199,10 +197,11 @@ def load_sso(event: CloudEvent) -> None:
             "jobName": job_name,
             "containerSpecGcsPath": DATAFLOW_TEMPLATE_PATH,
             "parameters": {
-                "dataset_id": dataset_id,
                 "bucket": bucket,
                 "object_prefix": object_prefix,
                 "tables": ",".join(uploaded_tables),
+                "staging_dataset_id": STAGING_DATASET_ID,
+                "internal_dataset_id": INTERNAL_DATASET_ID,
             },
             "environment": {
                 "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
