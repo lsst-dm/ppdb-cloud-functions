@@ -53,8 +53,6 @@ REGION = os.environ["REGION"]
 SERVICE_ACCOUNT_EMAIL = os.environ["SERVICE_ACCOUNT_EMAIL"]
 TEMP_LOCATION = os.environ["TEMP_LOCATION"]
 GOOGLE_CLOUD_SUBNETWORK = os.environ["GOOGLE_CLOUD_SUBNETWORK"]
-STAGING_DATASET_ID = os.environ["STAGING_DATASET_ID"]
-INTERNAL_DATASET_ID = os.environ["INTERNAL_DATASET_ID"]
 
 _credentials, _ = google.auth.default()
 _dataflow_client = build(
@@ -75,8 +73,8 @@ def load_sso(event: CloudEvent) -> None:
         The CloudEvent delivered by the Pub/Sub trigger. The Pub/Sub message
         is available at ``cloud_event.data["message"]`` and its ``data`` field
         contains a base64-encoded string representing a JSON message with
-        ``bucket``, ``object_prefix``, ``uploaded_tables`` and ``dataset_id``
-        fields.
+        ``bucket``, ``object_prefix``, ``uploaded_tables``, ``staging_dataset_id``
+        and ``internal_dataset_id`` fields.
     """
     # Fields attached to every structured log entry for this invocation.
     log_fields: dict[str, Any] = {"event_id": event["id"]}
@@ -165,6 +163,8 @@ def load_sso(event: CloudEvent) -> None:
         bucket = data["bucket"]
         object_prefix = data["object_prefix"]
         uploaded_tables = data["uploaded_tables"]
+        staging_dataset_id = data["staging_dataset_id"]
+        internal_dataset_id = data["internal_dataset_id"]
     except KeyError:
         log_event(
             logging.WARNING,
@@ -173,7 +173,13 @@ def load_sso(event: CloudEvent) -> None:
             exc_info=True,
             missing_keys=[
                 key
-                for key in ["bucket", "object_prefix", "uploaded_tables"]
+                for key in [
+                    "bucket",
+                    "object_prefix",
+                    "uploaded_tables",
+                    "staging_dataset_id",
+                    "internal_dataset_id",
+                ]
                 if key not in data
             ],
             pubsub_message=data,
@@ -187,6 +193,8 @@ def load_sso(event: CloudEvent) -> None:
         gcs_bucket=bucket,
         gcs_object_prefix=object_prefix,
         uploaded_tables=uploaded_tables,
+        staging_dataset_id=staging_dataset_id,
+        internal_dataset_id=internal_dataset_id,
     )
 
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
@@ -200,8 +208,8 @@ def load_sso(event: CloudEvent) -> None:
                 "bucket": bucket,
                 "object_prefix": object_prefix,
                 "tables": ",".join(uploaded_tables),
-                "staging_dataset_id": STAGING_DATASET_ID,
-                "internal_dataset_id": INTERNAL_DATASET_ID,
+                "staging_dataset_id": staging_dataset_id,
+                "internal_dataset_id": internal_dataset_id,
             },
             "environment": {
                 "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
