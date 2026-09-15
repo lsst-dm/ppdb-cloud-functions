@@ -220,6 +220,7 @@ def load_sso(event: CloudEvent) -> None:
                 "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
                 "tempLocation": TEMP_LOCATION,
                 "subnetwork": GOOGLE_CLOUD_SUBNETWORK,
+                "machineType": "n1-highmem-4",
             },
         }
     }
