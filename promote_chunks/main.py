@@ -22,52 +22,82 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import logging
-import os
-from google.cloud.logging.handlers import StructuredLogHandler
-from google.cloud.logging_v2.handlers.container_engine import ContainerEngineHandler
+
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.chunk_promoter import (
     ChunkPromoter,
     ChunkPromotionError,
     NoPromotableChunksError,
 )
+from lsst.dax.ppdb.gcp import CloudEventLogger, setup_cloud_logging
 
-def setup_logging():
-    # Set up stdout structured logging
-    handler = StructuredLogHandler()
-    
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    root_logger.addHandler(handler)
+# Configure cloud logging.
+setup_cloud_logging()
+_LOG = logging.getLogger("promote_chunks")
+
 
 def promote_chunks():
+    logger = CloudEventLogger(_LOG)
 
     promotable_chunks = ppdb.get_promotable_chunks()
     chunk_count = len(promotable_chunks)
-    logging.info("Found %d promotable chunks", chunk_count)
+    logger.log_event(
+        logging.INFO,
+        "Found promotable chunks",
+        "promotable_chunks_found",
+        chunk_count=chunk_count,
+    )
 
-    # Promote the chunks and log the number promoted.
     try:
+        # Execute the promotion process.
         promoter = ChunkPromoter(ppdb)
         promoter.promote_chunks(promotable_chunks)
     except NoPromotableChunksError as e:
-        # This is not a real error condition. It just means there are no chunks
-        # ready for promotion. It is easiest to catch this as an exception.
-        logging.info("No promotable chunks found: %s", str(e))
+        # No promotable chunks were found. This is handled as an error
+        # condition for control flow but may occur normally if no new chunks
+        # were staged for promotion. The message is emitted at `WARNING` level
+        # to improve visibility. No error is raised in this circumstance.
+        logger.log_event(
+            logging.WARNING,
+            "No promotable chunks found",
+            "no_promotable_chunks",
+            error=e,
+        )
     except ChunkPromotionError as e:
-        # Some error occurred during the promotion process.
-        logging.exception("Error during chunk promotion: %s", str(e))
+        # An error occurred during the promotion process which was trapped by
+        # the `ChunkPromoter` instance. Re-raise the exception to propagate
+        # the error.
+        logger.log_event(
+            logging.ERROR,
+            "Error during chunk promotion",
+            "chunk_promotion_error",
+            error=e,
+        )
         raise
     except Exception as e:
-        logging.exception("Unexpected error while promoting chunks: %s", str(e))
+        # Catch any other unexpected exceptions so they can be logged. This
+        # should not occur under normal circumstances as `ChunkPromoter` is
+        # designed to handle all expected errors. Re-raise the unexpected
+        # exception to propagate the error.
+        logger.log_event(
+            logging.ERROR,
+            "Unexpected error while promoting chunks",
+            "unexpected_promotion_error",
+            error=e,
+        )
         raise
 
-    # Promotion succeeded! Return the number of chunks promoted.
-    logging.info("Chunks promoted: %s", str(chunk_count))
+    # Promotion succeeded! Log the number of chunks promoted.
+    logger.log_event(
+        logging.INFO,
+        "Chunks promoted",
+        "chunks_promoted",
+        chunk_count=chunk_count,
+    )
+
 
 if __name__ == "__main__":
-    setup_logging()
-    logging.info("Promote Chunks Job starting")
-    # Setup PPDB BigQuery interface from environment variable configuration
+    _LOG.info("Promote Chunks Job starting")
     ppdb = PpdbBigQuery.from_env()
     promote_chunks()
+    _LOG.info("Promote Chunks Job finished")

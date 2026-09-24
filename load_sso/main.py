@@ -23,27 +23,21 @@ import base64
 import json
 import logging
 import os
-from typing import Any
 
 import functions_framework
 import google.auth
 from cloudevents.http import CloudEvent
-from google.api_core.exceptions import GoogleAPICallError
-from google.cloud import logging as cloud_logging
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from lsst.dax.ppdb.gcp import (
+    CloudEventLogger,
+    handle_request_error,
+    setup_cloud_logging,
+)
 
 # Configure cloud logging.
-client = cloud_logging.Client()
-client.setup_logging()  # Redirects standard logging to Cloud Logging
-log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
-log_level = getattr(logging, log_level_str, logging.INFO)
-logging.getLogger().setLevel(log_level)
-
-# Silence noisy warnings from google-auth-httplib2.
-logging.getLogger("google_auth_httplib2").setLevel(logging.ERROR)
-
-_LOG = logging.getLogger(__name__)
+setup_cloud_logging()
+_LOG = logging.getLogger("load_sso")
 
 # Read required environment variables.
 PROJECT_ID = os.environ["PROJECT_ID"]
@@ -68,89 +62,35 @@ _dataflow_client = build(
 @functions_framework.cloud_event
 def load_sso(event: CloudEvent) -> None:
     """Cloud Function to launch a Dataflow job to load SSO data."""
-    log_fields: dict[str, Any] = {"event_id": event["id"]}
-
-    def log_event(
-        level: int,
-        message: str,
-        event_name: str,
-        *,
-        exc_info: bool = False,
-        **fields: Any,
-    ) -> None:
-        """Emit a structured log entry under Cloud Logging ``json_fields``."""
-        _LOG.log(
-            level,
-            message,
-            exc_info=exc_info,
-            extra={"json_fields": {"event": event_name, **log_fields, **fields}},
-        )
-
-    def handle_error(e: Exception) -> bool:
-        """Log a job-submission failure and report whether it is retryable."""
-        extra_fields: dict[str, Any] = {}
-        job_already_active = isinstance(e, HttpError) and e.resp.status == 409
-        if isinstance(e, HttpError):
-            retryable = e.resp.status in (409, 429, 500, 503)
-            extra_fields["http_status"] = e.resp.status
-        elif isinstance(e, GoogleAPICallError):
-            retryable = True
-        else:
-            retryable = False
-
-        if job_already_active:
-            # Dataflow rejects launches while a job with the same name is
-            # active.
-            level = logging.INFO
-            log_message = "Dataflow job already active"
-            event_name = "dataflow_job_already_active"
-        elif retryable:
-            level = logging.WARNING
-            log_message = "Retryable error during job submission"
-            event_name = "retryable_error"
-        else:
-            level = logging.ERROR
-            log_message = "Non-retryable error during job submission"
-            event_name = "non_retryable_error"
-
-        log_event(
-            level,
-            log_message,
-            event_name,
-            exc_info=True,
-            error=str(e),
-            error_type=type(e).__name__,
-            **extra_fields,
-        )
-        return retryable
+    logger = CloudEventLogger(_LOG, event["id"])
 
     try:
         message = base64.b64decode(event.data["message"]["data"]).decode("utf-8")
-    except (KeyError, TypeError, ValueError):
-        log_event(
-            logging.WARNING,
+    except (KeyError, TypeError, ValueError) as e:
+        logger.log_event(
+            logging.ERROR,
             "Malformed or missing Pub/Sub data payload",
             "malformed_pubsub_payload",
-            exc_info=True,
+            error=e,
             pubsub_event=event.data,
         )
         return
 
     try:
         data = json.loads(message)
-    except json.JSONDecodeError:
-        log_event(
-            logging.WARNING,
+    except json.JSONDecodeError as e:
+        logger.log_event(
+            logging.ERROR,
             "Failed to decode JSON from Pub/Sub message",
             "json_decode_error",
-            exc_info=True,
+            error=e,
             pubsub_message=message,
         )
         return
 
     if not isinstance(data, dict):
-        log_event(
-            logging.WARNING,
+        logger.log_event(
+            logging.ERROR,
             "Pub/Sub message is not a JSON object",
             "invalid_payload_type",
             pubsub_message=data,
@@ -161,12 +101,12 @@ def load_sso(event: CloudEvent) -> None:
         bucket = data["bucket"]
         object_prefix = data["object_prefix"]
         uploaded_tables = data["uploaded_tables"]
-    except KeyError:
-        log_event(
+    except KeyError as e:
+        logger.log_event(
             logging.WARNING,
             "Missing required key in Pub/Sub message",
             "missing_key_in_pubsub_message",
-            exc_info=True,
+            error=e,
             missing_keys=[
                 key
                 for key in [
@@ -180,7 +120,7 @@ def load_sso(event: CloudEvent) -> None:
         )
         return
 
-    log_event(
+    logger.log_event(
         logging.INFO,
         "Received load SSO request",
         "load_sso_request_received",
@@ -191,7 +131,8 @@ def load_sso(event: CloudEvent) -> None:
 
     # A fixed job name is used to ensure that only one Load SSO job may be
     # active at once. Dataflow will reject launches if a job with the same name
-    # is already running.
+    # is already running. This is used as a simple concurrency control
+    # mechanism.
     job_name = "load-sso"
 
     launch_body = {
@@ -214,7 +155,7 @@ def load_sso(event: CloudEvent) -> None:
         }
     }
 
-    log_event(
+    logger.log_event(
         logging.INFO,
         "Launching Dataflow job",
         "dataflow_job_launching",
@@ -231,7 +172,7 @@ def load_sso(event: CloudEvent) -> None:
         response = request.execute()
 
         if "job" not in response:
-            log_event(
+            logger.log_event(
                 logging.ERROR,
                 "Dataflow API response missing 'job' field",
                 "dataflow_response_missing_job",
@@ -241,7 +182,7 @@ def load_sso(event: CloudEvent) -> None:
 
         job_id = response.get("job", {}).get("id", "unknown")
 
-        log_event(
+        logger.log_event(
             logging.INFO,
             "Dataflow job launched successfully",
             "dataflow_job_launched",
@@ -249,6 +190,19 @@ def load_sso(event: CloudEvent) -> None:
             dataflow_job_name=job_name,
         )
     except Exception as e:
-        if handle_error(e):
+        if isinstance(e, HttpError) and e.resp.status == 409:
+            # Dataflow rejects launches while a job with the same name is
+            # already active; this is expected and non-retryable.
+            logger.log_event(
+                logging.INFO,
+                "Dataflow job already active",
+                "dataflow_job_already_active",
+                error=e,
+                http_status=e.resp.status,
+                dataflow_job_name=job_name,
+            )
+            return
+
+        if handle_request_error(logger, e):
             raise  # Will trigger retry
         return  # Acknowledge message
