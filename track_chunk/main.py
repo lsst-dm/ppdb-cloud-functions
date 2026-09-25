@@ -147,8 +147,19 @@ def track_chunk(event: CloudEvent) -> None:
             error=e,
         )
         return
+    except sqlalchemy.exc.OperationalError as e:
+        # Transient Postgres errors, e.g. dropped connections, statement
+        # timeouts, and deadlocks. Raising triggers a Pub/Sub retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable database error while updating replica chunk",
+            "retryable_database_error",
+            error=e,
+        )
+        raise
     except sqlalchemy.exc.SQLAlchemyError as e:
-        # These are database-related errors; not considered retryable.
+        # Other database errors, e.g. integrity or programming errors, are
+        # not retryable.
         logger.log_event(
             logging.ERROR,
             "Database error while updating replica chunk",
