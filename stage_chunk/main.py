@@ -19,9 +19,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import base64
-import binascii
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -33,6 +30,8 @@ from cloudevents.http import CloudEvent
 from googleapiclient.discovery import build
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
+    DecodeMessageDataError,
+    decode_message_data,
     handle_request_error,
     setup_cloud_logging,
 )
@@ -79,39 +78,8 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
     logger = CloudEventLogger(_LOG, event["id"], log_fields)
 
     try:
-        message = base64.b64decode(event.data["message"]["data"]).decode("utf-8")
-    except (KeyError, binascii.Error, UnicodeDecodeError) as e:
-        # Non-retryable error, just log and return.
-        logger.log_event(
-            logging.ERROR,
-            "Malformed or missing Pub/Sub data payload",
-            "malformed_pubsub_payload",
-            error=e,
-            pubsub_event=event.data,
-        )
-        return
-
-    try:
-        data = json.loads(message)
-    except json.JSONDecodeError as e:
-        # Non-retryable error, just log and return.
-        logger.log_event(
-            logging.ERROR,
-            "Failed to decode JSON from Pub/Sub message",
-            "json_decode_error",
-            error=e,
-            pubsub_message=message,
-        )
-        return
-
-    if not isinstance(data, dict):
-        # Non-retryable error, just log and return.
-        logger.log_event(
-            logging.ERROR,
-            "Pub/Sub message is not a JSON object",
-            "invalid_payload_type",
-            pubsub_message=data,
-        )
+        data = decode_message_data(logger, event)
+    except DecodeMessageDataError:
         return
 
     try:
