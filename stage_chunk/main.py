@@ -49,6 +49,7 @@ SERVICE_ACCOUNT_EMAIL = os.environ["SERVICE_ACCOUNT_EMAIL"]
 TEMP_LOCATION = os.environ["TEMP_LOCATION"]
 TOPIC_NAME = os.environ["TOPIC_NAME"]
 GOOGLE_CLOUD_SUBNETWORK = os.environ.get("GOOGLE_CLOUD_SUBNETWORK")
+NUM_RETRIES = int(os.environ["NUM_RETRIES"])
 
 _credentials, _ = google.auth.default()
 
@@ -148,7 +149,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             .flexTemplates()
             .launch(projectId=PROJECT_ID, location=REGION, body=launch_body)
         )
-        response = request.execute()
+        response = request.execute(num_retries=NUM_RETRIES)
 
         if "job" not in response:
             logger.log_event(

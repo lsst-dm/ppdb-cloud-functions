@@ -49,6 +49,7 @@ GOOGLE_CLOUD_SUBNETWORK = os.environ["GOOGLE_CLOUD_SUBNETWORK"]
 STAGING_DATASET_ID = os.environ["STAGING_DATASET_ID"]
 INTERNAL_DATASET_ID = os.environ["INTERNAL_DATASET_ID"]
 DATAFLOW_MACHINE_TYPE = os.environ["DATAFLOW_MACHINE_TYPE"]
+NUM_RETRIES = int(os.environ["NUM_RETRIES"])
 
 _credentials, _ = google.auth.default()
 _dataflow_client = build(
@@ -141,7 +142,7 @@ def load_sso(event: CloudEvent) -> None:
             .flexTemplates()
             .launch(projectId=PROJECT_ID, location=REGION, body=launch_body)
         )
-        response = request.execute()
+        response = request.execute(num_retries=NUM_RETRIES)
 
         if "job" not in response:
             logger.log_event(
