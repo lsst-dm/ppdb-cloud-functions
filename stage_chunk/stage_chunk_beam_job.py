@@ -45,17 +45,16 @@ cloud_logging.Client().setup_logging()
 logging.getLogger().setLevel(logging.INFO)
 
 
-class BeamSuppressUpdateDestinationSchemaWarning(logging.Filter):
-    """Suppresses the UpdateDestinationSchema warning from Apache Beam."""
+class SuppressNoIteratorWarning(logging.Filter):
+    """Suppress the unhelpful Beam process-method iterator warning.
+
+    Note
+    ----
+    Duplicated across Dataflow jobs to avoid a shared dependency.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """Suppress the UpdateDestinationSchema warning.
-
-        Parameters
-        ----------
-        record : `logging.LogRecord`
-            The log record to filter.
-        """
+        """Return false for the warning that should be suppressed."""
         if record.name == "apache_beam.transforms.core":
             message = str(record.getMessage())
             if "No iterator is returned by the process method" in message:
@@ -64,7 +63,7 @@ class BeamSuppressUpdateDestinationSchemaWarning(logging.Filter):
 
 
 logging.getLogger("apache_beam.transforms.core").addFilter(
-    BeamSuppressUpdateDestinationSchemaWarning()
+    SuppressNoIteratorWarning()
 )
 
 
