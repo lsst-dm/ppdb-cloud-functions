@@ -19,8 +19,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import base64
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -29,20 +27,19 @@ from typing import Any
 import functions_framework
 import google.auth
 from cloudevents.http import CloudEvent
-from google.api_core.exceptions import GoogleAPICallError
-from google.cloud import logging as cloud_logging
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+from lsst.dax.ppdb.gcp import (
+    CloudEventLogger,
+    DecodeMessageDataError,
+    decode_message_data,
+    handle_request_error,
+    setup_cloud_logging,
+)
 
 # Configure cloud logging.
-client = cloud_logging.Client()
-client.setup_logging()  # Redirects standard logging to Cloud Logging
-log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
-log_level = getattr(logging, log_level_str, logging.INFO)
-logging.getLogger().setLevel(log_level)
+setup_cloud_logging()
+_LOG = logging.getLogger("stage_chunk")
 
-# Silence noisy warnings from google-auth-httplib2.
-logging.getLogger("google_auth_httplib2").setLevel(logging.ERROR)
 
 # Read required environment variables.
 PROJECT_ID = os.environ["PROJECT_ID"]
@@ -52,8 +49,10 @@ SERVICE_ACCOUNT_EMAIL = os.environ["SERVICE_ACCOUNT_EMAIL"]
 TEMP_LOCATION = os.environ["TEMP_LOCATION"]
 TOPIC_NAME = os.environ["TOPIC_NAME"]
 GOOGLE_CLOUD_SUBNETWORK = os.environ.get("GOOGLE_CLOUD_SUBNETWORK")
+NUM_RETRIES = int(os.environ["NUM_RETRIES"])
 
 _credentials, _ = google.auth.default()
+
 _dataflow_client = build(
     "dataflow",
     "v1b3",
@@ -64,109 +63,37 @@ _dataflow_client = build(
 
 @functions_framework.cloud_event
 def trigger_stage_chunk(event: CloudEvent) -> None:
-    """Cloud Function to launch a Dataflow job to stage PPDB data.
+    """Cloud Function that launches a Dataflow job to stage chunks of PPDB
+    data.
 
     Parameters
     ----------
-    cloud_event : `CloudEvent`
-        The CloudEvent delivered by the Pub/Sub trigger. The Pub/Sub message
-        is available at ``cloud_event.data["message"]`` and its ``data`` field
-        contains a base64-encoded string representing a JSON message with
-        ``dataset``, ``chunk_id`` and ``folder`` fields.
+    cloud_event
+        The CloudEvent delivered by the Pub/Sub trigger. The ``dataset``,
+        ``chunk_id`` and ``folder`` fields should be included in the message
+        data.
     """
-    # Fields attached to every structured log entry for this invocation.
-    log_fields: dict[str, Any] = {"event_id": event["id"]}
+    # Updatable fields attached to every log entry.
+    log_fields: dict[str, Any] = {}
 
-    def log_event(
-        level: int,
-        message: str,
-        event_name: str,
-        *,
-        exc_info: bool = False,
-        **fields: Any,
-    ) -> None:
-        """Emit a structured log entry under Cloud Logging ``json_fields``."""
-        logging.log(
-            level,
-            message,
-            exc_info=exc_info,
-            extra={"json_fields": {"event": event_name, **log_fields, **fields}},
-        )
-
-    def handle_error(e: Exception) -> bool:
-        """Log a job-submission failure and report whether it is retryable."""
-        extra_fields: dict[str, Any] = {}
-        if isinstance(e, HttpError):
-            retryable = e.resp.status in (429, 500, 503)
-            extra_fields["http_status"] = e.resp.status
-        elif isinstance(e, GoogleAPICallError):
-            retryable = True
-        else:
-            retryable = False
-
-        if retryable:
-            level = logging.WARNING
-            log_message = "Retryable error during job submission"
-            event_name = "retryable_error"
-        else:
-            level = logging.ERROR
-            log_message = "Non-retryable error during job submission"
-            event_name = "non_retryable_error"
-
-        log_event(
-            level,
-            log_message,
-            event_name,
-            exc_info=True,
-            error=str(e),
-            error_type=type(e).__name__,
-            **extra_fields,
-        )
-        return retryable
+    logger = CloudEventLogger(_LOG, event["id"], log_fields)
 
     try:
-        message = base64.b64decode(event.data["message"]["data"]).decode("utf-8")
-    except Exception:
-        log_event(
-            logging.WARNING,
-            "Malformed or missing Pub/Sub data payload",
-            "malformed_pubsub_payload",
-            exc_info=True,
-            pubsub_event=event.data,
-        )
-        return
-
-    try:
-        data = json.loads(message)
-    except json.JSONDecodeError:
-        log_event(
-            logging.WARNING,
-            "Failed to decode JSON from Pub/Sub message",
-            "json_decode_error",
-            exc_info=True,
-            pubsub_message=message,
-        )
-        return
-
-    if not isinstance(data, dict):
-        log_event(
-            logging.WARNING,
-            "Pub/Sub message is not a JSON object",
-            "invalid_payload_type",
-            pubsub_message=data,
-        )
+        data = decode_message_data(logger, event)
+    except DecodeMessageDataError:
         return
 
     try:
         dataset_id = data["dataset"]
         chunk_id = data["chunk_id"]
         folder = data["folder"]
-    except KeyError:
-        log_event(
+    except KeyError as e:
+        # Non-retryable error, just log and return.
+        logger.log_event(
             logging.WARNING,
             "Missing required key in Pub/Sub message",
             "missing_key_in_pubsub_message",
-            exc_info=True,
+            error=e,
             missing_keys=[
                 key for key in ["dataset", "chunk_id", "folder"] if key not in data
             ],
@@ -174,10 +101,10 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
-    # Attach the correlation identifiers to all subsequent logs.
+    # Attach chunk ID and dataset ID to subsequent log entries.
     log_fields.update(chunk_id=chunk_id, dataset=dataset_id)
 
-    log_event(
+    logger.log_event(
         logging.INFO,
         "Received stage chunk request",
         "stage_chunk_request_received",
@@ -205,7 +132,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         }
     }
 
-    log_event(
+    logger.log_event(
         logging.INFO,
         "Launching Dataflow job",
         "dataflow_job_launching",
@@ -222,10 +149,10 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             .flexTemplates()
             .launch(projectId=PROJECT_ID, location=REGION, body=launch_body)
         )
-        response = request.execute()
+        response = request.execute(num_retries=NUM_RETRIES)
 
         if "job" not in response:
-            log_event(
+            logger.log_event(
                 logging.ERROR,
                 "Dataflow API response missing 'job' field",
                 "dataflow_response_missing_job",
@@ -235,7 +162,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
 
         job_id = response.get("job", {}).get("id", "unknown")
 
-        log_event(
+        logger.log_event(
             logging.INFO,
             "Dataflow job launched successfully",
             "dataflow_job_launched",
@@ -243,8 +170,12 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             dataflow_job_name=job_name,
         )
     except Exception as e:
-        if handle_error(e):
-            raise  # Will trigger retry
-        return  # Acknowledge message
+        retryable = handle_request_error(logger, e)
+        if retryable:
+            # Raising the exception should trigger a retry.
+            raise
+        else:
+            # Non-retryable error, just return.
+            return
 
     return

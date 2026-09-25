@@ -61,8 +61,13 @@ _STAGING_TABLE_TTL = datetime.timedelta(hours=2)
 TableSpec = tuple[str, str, str]
 
 
-class BeamSuppressUpdateDestinationSchemaWarning(logging.Filter):
-    """Suppress the unhelpful Beam process-method iterator warning."""
+class SuppressNoIteratorWarning(logging.Filter):
+    """Suppress the unhelpful Beam process-method iterator warning.
+
+    Note
+    ----
+    Duplicated across Dataflow jobs to avoid a shared dependency.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         """Return false for the warning that should be suppressed."""
@@ -73,9 +78,7 @@ class BeamSuppressUpdateDestinationSchemaWarning(logging.Filter):
         return True
 
 
-logging.getLogger("apache_beam.transforms.core").addFilter(
-    BeamSuppressUpdateDestinationSchemaWarning()
-)
+logging.getLogger("apache_beam.transforms.core").addFilter(SuppressNoIteratorWarning())
 
 
 def log_event(level: int, message: str, event_name: str, **fields: Any) -> None:

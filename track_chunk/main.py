@@ -19,24 +19,23 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import base64
-import binascii
-import json
 import logging
-import os
+from typing import Any
 
 import functions_framework
+import sqlalchemy.exc
 from cloudevents.http import CloudEvent
-from google.cloud import logging as cloud_logging
 from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery, UpdatableField
+from lsst.dax.ppdb.gcp import (
+    CloudEventLogger,
+    DecodeMessageDataError,
+    decode_message_data,
+    setup_cloud_logging,
+)
 
 # Configure cloud logging.
-client = cloud_logging.Client()
-client.setup_logging()  # Redirects standard logging to Cloud Logging
-log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
-log_level = getattr(logging, log_level_str, logging.INFO)
-logging.getLogger().setLevel(log_level)
-
+setup_cloud_logging()
+_LOG = logging.getLogger("track_chunk")
 
 # Setup PPDB BigQuery interface from environment variable configuration
 ppdb = PpdbBigQuery.from_env()
@@ -44,69 +43,155 @@ ppdb = PpdbBigQuery.from_env()
 
 @functions_framework.cloud_event
 def track_chunk(event: CloudEvent) -> None:
+    """Cloud Function to update the status of an APDB replica chunk.
+
+    Parameters
+    ----------
+    event : `CloudEvent`
+        The CloudEvent delivered by the Pub/Sub trigger. The Pub/Sub message
+        is available at ``event.data["message"]`` and its ``data`` field
+        contains a base64-encoded string representing a JSON message with
+        ``operation``, ``apdb_replica_chunk`` and ``values`` fields.
+    """
+    log_fields: dict[str, Any] = {}
+
+    logger = CloudEventLogger(_LOG, event["id"], log_fields)
+
     try:
-        try:
-            message = base64.b64decode(event.data["message"]["data"]).decode("utf-8")
-        except (KeyError, binascii.Error, UnicodeDecodeError) as e:
-            raise Exception("Malformed or missing Pub/Sub data payload") from e
+        data = decode_message_data(logger, event)
+    except DecodeMessageDataError:
+        return
 
-        try:
-            data = json.loads(message)
-        except json.JSONDecodeError as e:
-            raise Exception("Failed to decode JSON from Pub/Sub message") from e
+    logger.log_event(
+        logging.INFO,
+        "Received event to track replica chunk",
+        "track_chunks_event_received",
+        data=data,
+    )
 
-        logging.info(
-            "Received event to track replica chunk",
-            extra={
-                "json_fields": {"event": "track_chunks_event_received", "data": data}
-            },
+    operation = data.get("operation")
+    if not operation or operation != "update":
+        logger.log_event(
+            logging.ERROR,
+            "Unsupported or missing operation",
+            "unsupported_operation",
+            operation=operation,
+            pubsub_message=data,
         )
+        return
 
-        operation = data.get("operation")
-        if not operation:
-            raise ValueError("Empty 'operation' value in Pub/Sub message")
-        if operation != "update":
-            raise ValueError(f"Unsupported operation: {operation}")
+    values = data.get("values")
+    if not values:
+        logger.log_event(
+            logging.ERROR,
+            "No 'values' key found in Pub/Sub message",
+            "missing_values",
+            pubsub_message=data,
+        )
+        return
 
-        values = data.get("values")
-        if not values:
-            raise ValueError("No 'values' key found in Pub/Sub message")
+    if not isinstance(values, dict):
+        logger.log_event(
+            logging.ERROR,
+            "'values' is not a JSON object",
+            "invalid_values_type",
+            values=values,
+        )
+        return
 
-        chunk_id = data.get("apdb_replica_chunk")
-        if not chunk_id:
-            raise ValueError("No 'apdb_replica_chunk' value in Pub/Sub message")
+    apdb_replica_chunk = data.get("apdb_replica_chunk")
+    if not apdb_replica_chunk:
+        logger.log_event(
+            logging.ERROR,
+            "No 'apdb_replica_chunk' value in Pub/Sub message",
+            "missing_chunk_id",
+            pubsub_message=data,
+        )
+        return
 
-        if operation != "update":
-            raise ValueError(f"Unsupported operation: {operation}")
+    new_status = values.get("status")
+    if not new_status:
+        logger.log_event(
+            logging.ERROR,
+            "Empty 'status' value in values for update operation",
+            "missing_status",
+            apdb_replica_chunk=apdb_replica_chunk,
+            values=values,
+        )
+        return
 
-        chunk = ppdb.find_chunk_by_id(int(chunk_id))
+    # Attach chunk ID to subsequent log entries.
+    log_fields.update(chunk_id=apdb_replica_chunk)
+
+    try:
+        chunk = ppdb.find_chunk_by_id(int(apdb_replica_chunk))
         if not chunk:
-            raise LookupError(f"Replica chunk {chunk_id} not found")
-
-        new_status = values.get("status")
-        if not new_status:
-            raise ValueError("Empty 'status' value in values for update operation")
+            logger.log_event(
+                logging.WARNING,
+                "Replica chunk not found",
+                "chunk_not_found",
+            )
+            return
 
         update_count = ppdb.update_chunks(
             [chunk.with_new_status(ChunkStatus(new_status))], {UpdatableField.STATUS}
         )
-        if update_count < 1:
-            # This should not happen but raise an error just in case.
-            raise LookupError(
-                f"Failed to update replica chunk {chunk_id} with values: {values}"
-            )
-
-        logging.info(
-            "Updated replica chunk status",
-            extra={
-                "json_fields": {
-                    "event": "replica_chunk_status_updated",
-                    "chunk_id": chunk_id,
-                    "values": values,
-                    "affected_rows": update_count,
-                }
-            },
+    except LookupError as e:
+        # Raised by update_chunks if the chunk was removed between the
+        # existence check above and the update. This is highly unlikely but
+        # trap for it just in case. This error is not retryable.
+        logger.log_event(
+            logging.WARNING,
+            "Replica chunk no longer exists",
+            "chunk_not_found_during_update",
+            error=e,
         )
+        return
+    except sqlalchemy.exc.OperationalError as e:
+        # Transient Postgres errors, e.g. dropped connections, statement
+        # timeouts, and deadlocks. Raising triggers a Pub/Sub retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable database error while updating replica chunk",
+            "retryable_database_error",
+            error=e,
+        )
+        raise
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        # Other database errors, e.g. integrity or programming errors, are
+        # not retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Database error while updating replica chunk",
+            "database_error",
+            error=e,
+        )
+        return
+    except Exception as e:
+        # Catch-all for unexpected errors; not considered retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Unexpected error while updating replica chunk",
+            "unexpected_error",
+            error=e,
+        )
+        return
 
-    except Exception:
-        logging.exception("Error processing Pub/Sub event")
+    if update_count < 1:
+        # This may not even be possible without another error occurring first,
+        # but log an error anyway. This is not retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Failed to update replica chunk",
+            "chunk_update_failed",
+            values=values,
+        )
+        return
+
+    logger.log_event(
+        logging.INFO,
+        "Updated replica chunk status",
+        "replica_chunk_status_updated",
+        values=values,
+        affected_rows=update_count,
+    )
