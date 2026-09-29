@@ -50,7 +50,7 @@ def promote_chunks():
 
     try:
         # Execute the promotion process.
-        promoter = ChunkPromoter(ppdb)
+        promoter = ChunkPromoter(ppdb, logger)
         promoter.promote_chunks(promotable_chunks)
     except NoPromotableChunksError as e:
         # No promotable chunks were found. This is handled as an error
