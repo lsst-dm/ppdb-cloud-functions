@@ -26,8 +26,10 @@ from typing import Any
 
 import functions_framework
 import google.auth
+import sqlalchemy.exc
 from cloudevents.http import CloudEvent
 from googleapiclient.discovery import build
+from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
@@ -60,6 +62,9 @@ _dataflow_client = build(
     cache_discovery=False,
 )
 
+# Setup PPDB BigQuery interface from environment variable configuration
+PPDB = PpdbBigQuery.from_env()
+
 
 @functions_framework.cloud_event
 def trigger_stage_chunk(event: CloudEvent) -> None:
@@ -85,7 +90,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
 
     try:
         dataset_id = data["dataset"]
-        chunk_id = data["chunk_id"]
+        chunk_id_raw = data["chunk_id"]
         folder = data["folder"]
     except KeyError as e:
         # Non-retryable error, just log and return.
@@ -101,6 +106,20 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
+    # Convert the raw chunk ID to an integer.
+    try:
+        chunk_id = int(chunk_id_raw)
+    except (ValueError, TypeError) as e:
+        # Non-retryable error, just log and return.
+        logger.log_event(
+            logging.WARNING,
+            "Invalid chunk_id in Pub/Sub message",
+            "invalid_chunk_id",
+            error=e,
+            chunk_id=chunk_id_raw,
+        )
+        return
+
     # Attach chunk ID and dataset ID to subsequent log entries.
     log_fields.update(chunk_id=chunk_id, dataset=dataset_id)
 
@@ -110,6 +129,52 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         "stage_chunk_request_received",
         gcs_folder=folder,
     )
+
+    # Get the chunk's metadata from the PPDB Postgres database.
+    try:
+        chunk = PPDB.find_chunk_by_id(chunk_id)
+    except sqlalchemy.exc.OperationalError as e:
+        # Transient database errors, e.g. dropped connections, statement
+        # timeouts, and deadlocks. Raising triggers a Pub/Sub retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable database error while retrieving chunk",
+            "retryable_database_error",
+            error=e,
+        )
+        raise
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        # Other database errors, e.g. integrity or programming errors, are
+        # not retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Error retrieving chunk from PPDB",
+            "ppdb_chunk_retrieval_error",
+            error=e,
+        )
+        return
+
+    # Check if the chunk was found in the database.
+    if chunk is None:
+        logger.log_event(
+            logging.WARNING,
+            "Chunk not found in PPDB",
+            "ppdb_chunk_not_found",
+        )
+        return
+
+    # Check if the chunk has a valid status for staging. UPLOADED are chunks
+    # that have been successfully uploaded to GCS and are ready for staging.
+    # FAILED are chunks where the previous ingestion attempt failed and can be
+    # retried.
+    if chunk.status not in (ChunkStatus.UPLOADED, ChunkStatus.FAILED):
+        logger.log_event(
+            logging.WARNING,
+            "Chunk is not in a valid state for staging",
+            "invalid_chunk_status",
+            chunk_status=chunk.status,
+        )
+        return
 
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
     job_name = f"stage-chunk-{chunk_id}-{timestamp}"
