@@ -30,10 +30,15 @@ from googleapiclient.errors import HttpError
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
+    cloud_run_initialize_sentry,
     decode_message_data,
+    flush_sentry,
     handle_request_error,
     setup_cloud_logging,
 )
+
+
+cloud_run_initialize_sentry()
 
 # Configure cloud logging.
 setup_cloud_logging()
@@ -61,6 +66,7 @@ _dataflow_client = build(
 
 
 @functions_framework.cloud_event
+@flush_sentry
 def load_sso(event: CloudEvent) -> None:
     """Cloud Function to launch a Dataflow job to load SSO data."""
     logger = CloudEventLogger(_LOG, event["id"])
