@@ -29,7 +29,15 @@ from lsst.dax.ppdb.bigquery.chunk_promoter import (
     ChunkPromotionError,
     NoPromotableChunksError,
 )
-from lsst.dax.ppdb.gcp import CloudEventLogger, setup_cloud_logging
+from lsst.dax.ppdb.gcp import (
+    CloudEventLogger,
+    cloud_run_initialize_sentry,
+    flush_sentry,
+    setup_cloud_logging,
+)
+
+
+cloud_run_initialize_sentry()
 
 # Configure cloud logging.
 setup_cloud_logging()
@@ -96,8 +104,13 @@ def promote_chunks():
     )
 
 
-if __name__ == "__main__":
+@flush_sentry
+def main() -> None:
     _LOG.info("Promote Chunks Job starting")
     ppdb = PpdbBigQuery.from_env()
     promote_chunks()
     _LOG.info("Promote Chunks Job finished")
+
+
+if __name__ == "__main__":
+    main()

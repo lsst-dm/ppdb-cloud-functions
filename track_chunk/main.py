@@ -22,16 +22,23 @@
 import logging
 from typing import Any
 
+
+from cloudevents.http import CloudEvent
 import functions_framework
 import sqlalchemy.exc
-from cloudevents.http import CloudEvent
+
 from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery, UpdatableField
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
+    cloud_run_initialize_sentry,
     decode_message_data,
+    flush_sentry,
     setup_cloud_logging,
 )
+
+
+cloud_run_initialize_sentry()
 
 # Configure cloud logging.
 setup_cloud_logging()
@@ -42,6 +49,7 @@ ppdb = PpdbBigQuery.from_env()
 
 
 @functions_framework.cloud_event
+@flush_sentry
 def track_chunk(event: CloudEvent) -> None:
     """Cloud Function to update the status of an APDB replica chunk.
 
@@ -53,6 +61,7 @@ def track_chunk(event: CloudEvent) -> None:
         contains a base64-encoded string representing a JSON message with
         ``operation``, ``apdb_replica_chunk`` and ``values`` fields.
     """
+
     log_fields: dict[str, Any] = {}
 
     logger = CloudEventLogger(_LOG, event["id"], log_fields)
