@@ -46,6 +46,7 @@ _LOG = logging.getLogger("promote_chunks")
 
 def promote_chunks():
     logger = CloudEventLogger(_LOG)
+    ppdb = PpdbBigQuery.from_env()
 
     promotable_chunks = ppdb.get_promotable_chunks()
     chunk_count = len(promotable_chunks)
@@ -107,7 +108,6 @@ def promote_chunks():
 @flush_sentry
 def main() -> None:
     _LOG.info("Promote Chunks Job starting")
-    ppdb = PpdbBigQuery.from_env()
     promote_chunks()
     _LOG.info("Promote Chunks Job finished")
 
