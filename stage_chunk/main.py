@@ -27,8 +27,15 @@ import functions_framework
 import google.auth
 import sqlalchemy.exc
 from cloudevents.http import CloudEvent
+from google.api_core.exceptions import NotFound
+from google.cloud import bigquery
 from googleapiclient.discovery import build
-from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery
+from lsst.dax.ppdb.bigquery import Manifest, PpdbBigQuery
+from lsst.dax.ppdb.bigquery.ingest import (
+    ChunkAlreadyStagedError,
+    InvalidChunkStatusError,
+    validate_chunk_for_staging,
+)
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
@@ -89,7 +96,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
 
     try:
         dataset_id = data["dataset"]
-        chunk_id_raw = data["chunk_id"]
+        chunk_id = int(data["chunk_id"])
         folder = data["folder"]
     except KeyError as e:
         # Non-retryable error, just log and return.
@@ -104,10 +111,6 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             pubsub_message=data,
         )
         return
-
-    # Convert the raw chunk ID to an integer.
-    try:
-        chunk_id = int(chunk_id_raw)
     except (ValueError, TypeError) as e:
         # Non-retryable error, just log and return.
         logger.log_event(
@@ -115,7 +118,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             "Invalid chunk_id in Pub/Sub message",
             "invalid_chunk_id",
             error=e,
-            chunk_id=chunk_id_raw,
+            chunk_id=data["chunk_id"],
         )
         return
 
@@ -162,16 +165,46 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
-    # Check if the chunk has a valid status for staging. UPLOADED are chunks
-    # that have been successfully uploaded to GCS and are ready for staging.
-    # FAILED are chunks where the previous ingestion attempt failed and can be
-    # retried.
-    if chunk.status not in (ChunkStatus.UPLOADED, ChunkStatus.FAILED):
+    # Check that the chunk's status allows staging and that none of its data
+    # is already in the staging tables, which would cause duplicate records.
+    try:
+        manifest = Manifest.from_uri(folder)
+        bq_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
+        validate_chunk_for_staging(
+            chunk, manifest, f"{PROJECT_ID}.{dataset_id}", bq_client
+        )
+    except InvalidChunkStatusError as e:
         logger.log_event(
             logging.WARNING,
             "Chunk is not in a valid state for staging",
             "invalid_chunk_status",
+            error=e,
             chunk_status=chunk.status,
+        )
+        return
+    except ChunkAlreadyStagedError as e:
+        logger.log_event(
+            logging.ERROR,
+            "Chunk already has staged data in BigQuery",
+            "chunk_already_staged",
+            error=e,
+        )
+        return
+    except NotFound as e:
+        # Missing staging dataset or table is a configuration error.
+        logger.log_event(
+            logging.ERROR,
+            "BigQuery staging dataset or table not found",
+            "staging_resource_not_found",
+            error=e,
+        )
+        return
+    except Exception as e:
+        logger.log_event(
+            logging.ERROR,
+            "Unexpected error while validating chunk for staging",
+            "chunk_validation_error",
+            error=e,
         )
         return
 
