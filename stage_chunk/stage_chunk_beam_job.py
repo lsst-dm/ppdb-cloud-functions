@@ -38,7 +38,7 @@ from apache_beam.options.pipeline_options import (
 )
 from google.cloud import logging as cloud_logging
 from google.cloud import pubsub_v1, storage
-from lsst.dax.ppdb.bigquery import Manifest
+from lsst.dax.ppdb.bigquery import ChunkStatus, Manifest
 
 # Configure Google Cloud logging
 cloud_logging.Client().setup_logging()
@@ -62,9 +62,7 @@ class SuppressNoIteratorWarning(logging.Filter):
         return True
 
 
-logging.getLogger("apache_beam.transforms.core").addFilter(
-    SuppressNoIteratorWarning()
-)
+logging.getLogger("apache_beam.transforms.core").addFilter(SuppressNoIteratorWarning())
 
 
 class CustomOptions(PipelineOptions):
@@ -202,8 +200,10 @@ def read_manifest(chunk_id: int, folder: str) -> Manifest:
     return Manifest.from_json_str(manifest_content)
 
 
-def update_chunk_status(project_id: str, topic_name: str, chunk_id: int) -> None:
-    """Update the status of the chunk in the tracking database.
+def publish_chunk_status(
+    project_id: str, topic_name: str, chunk_id: int, status: ChunkStatus
+) -> None:
+    """Publish a status update for the chunk to the tracking topic.
 
     Parameters
     ----------
@@ -213,6 +213,8 @@ def update_chunk_status(project_id: str, topic_name: str, chunk_id: int) -> None
         The name of the Pub/Sub topic to publish the status update.
     chunk_id : `int`
         The ID of the chunk being processed.
+    status : `ChunkStatus`
+        The new status of the chunk.
     """
     publisher = pubsub_v1.PublisherClient()
     topic_path = publisher.topic_path(project_id, topic_name)
@@ -221,7 +223,7 @@ def update_chunk_status(project_id: str, topic_name: str, chunk_id: int) -> None
         "operation": "update",
         "apdb_replica_chunk": chunk_id,
         "values": {
-            "status": "staged",
+            "status": status.value,
         },
     }
     try:
@@ -233,8 +235,6 @@ def update_chunk_status(project_id: str, topic_name: str, chunk_id: int) -> None
             "Failed to publish message to topic %s: %s", topic_path, message
         )
         raise
-
-    logging.info(f"Published chunk status update for chunk {chunk_id}")
 
 
 def run(argv: Optional[list[str]] = None) -> None:
@@ -269,30 +269,30 @@ def run(argv: Optional[list[str]] = None) -> None:
             "Read manifest contents: %s",
             manifest.model_dump_json(),
         )
+
+        if manifest.is_empty_chunk:
+            logging.info("Chunk %d is empty. No data to stage.", chunk_id)
+            return
+
+        logging.info("Loading table files: %s", list(manifest.files))
+
+        with apache_beam.Pipeline(options=options) as pipeline:
+            for file_name in manifest.files:
+                data = read_parquet(pipeline, folder, file_name)
+
+                table_fqn = f"{project_id}:{dataset_id}.{Path(file_name).stem}"
+
+                write_to_bigquery(
+                    data,
+                    table_fqn,
+                    temp_location,
+                )
     except Exception:
-        logging.exception("Failed to read manifest file from GCS")
+        logging.exception("Failed to stage chunk %d", chunk_id)
+        publish_chunk_status(project_id, topic_name, chunk_id, ChunkStatus.FAILED)
         raise
 
-    if manifest.is_empty_chunk:
-        logging.info("Chunk %d is empty. No data to stage.", chunk_id)
-        return
-
-    logging.info("Loading table files: %s", list(manifest.files))
-
-    with apache_beam.Pipeline(options=options) as pipeline:
-        for file_name in manifest.files:
-            data = read_parquet(pipeline, folder, file_name)
-
-            table_fqn = f"{project_id}:{dataset_id}.{Path(file_name).stem}"
-
-            write_to_bigquery(
-                data,
-                table_fqn,
-                temp_location,
-            )
-
-    # Update the chunk status in the tracking database.
-    update_chunk_status(project_id, topic_name, chunk_id)
+    publish_chunk_status(project_id, topic_name, chunk_id, ChunkStatus.STAGED)
 
 
 if __name__ == "__main__":
