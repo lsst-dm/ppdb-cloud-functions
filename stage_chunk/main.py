@@ -21,17 +21,27 @@
 
 import logging
 import os
-from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import functions_framework
 import google.auth
+import sqlalchemy.exc
 from cloudevents.http import CloudEvent
+from google.api_core.exceptions import NotFound, ServerError, TooManyRequests
+from google.cloud import bigquery
 from googleapiclient.discovery import build
+from lsst.dax.ppdb.bigquery import (
+    ChunkStatus,
+    ChunkStatusTransitionError,
+    Manifest,
+    PpdbBigQuery,
+)
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
     decode_message_data,
+    handle_database_error,
     handle_request_error,
     setup_cloud_logging,
 )
@@ -52,13 +62,42 @@ GOOGLE_CLOUD_SUBNETWORK = os.environ.get("GOOGLE_CLOUD_SUBNETWORK")
 NUM_RETRIES = int(os.environ["NUM_RETRIES"])
 
 _credentials, _ = google.auth.default()
-
 _dataflow_client = build(
     "dataflow",
     "v1b3",
     credentials=_credentials,
     cache_discovery=False,
 )
+_bq_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
+
+# Setup PPDB BigQuery interface from environment variable configuration.
+_ppdb = PpdbBigQuery.from_env()
+
+
+def _find_staged_tables(
+    bq_client: bigquery.Client, dataset_fqn: str, chunk_id: int, manifest: Manifest
+) -> list[str]:
+    """Return the names of the staging tables that already contain rows for
+    the chunk.
+    """
+    if manifest.is_empty_chunk:
+        return []
+
+    location = bq_client.get_dataset(dataset_fqn).location
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("chunk_id", "INT64", chunk_id)]
+    )
+    staged_table_names = []
+    for file_name in manifest.files:
+        table_name = Path(file_name).stem
+        sql = (
+            f"SELECT COUNT(*) FROM `{dataset_fqn}.{table_name}` "
+            "WHERE apdb_replica_chunk = @chunk_id"
+        )
+        job = bq_client.query(sql, job_config=job_config, location=location)
+        if next(iter(job.result()))[0] > 0:
+            staged_table_names.append(table_name)
+    return staged_table_names
 
 
 @functions_framework.cloud_event
@@ -85,7 +124,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
 
     try:
         dataset_id = data["dataset"]
-        chunk_id = data["chunk_id"]
+        chunk_id = int(data["chunk_id"])
         folder = data["folder"]
     except KeyError as e:
         # Non-retryable error, just log and return.
@@ -100,6 +139,16 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             pubsub_message=data,
         )
         return
+    except (ValueError, TypeError) as e:
+        # Non-retryable error, just log and return.
+        logger.log_event(
+            logging.WARNING,
+            "Invalid chunk_id in Pub/Sub message",
+            "invalid_chunk_id",
+            error=e,
+            chunk_id=data["chunk_id"],
+        )
+        return
 
     # Attach chunk ID and dataset ID to subsequent log entries.
     log_fields.update(chunk_id=chunk_id, dataset=dataset_id)
@@ -111,8 +160,129 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         gcs_folder=folder,
     )
 
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
-    job_name = f"stage-chunk-{chunk_id}-{timestamp}"
+    # Get the chunk's metadata from the PPDB Postgres database.
+    try:
+        chunk = _ppdb.find_chunk_by_id(chunk_id)
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        # Raising a retryable error triggers a Pub/Sub retry.
+        if handle_database_error(logger, e):
+            raise
+        return
+
+    # Check if the chunk was found in the database.
+    if chunk is None:
+        logger.log_event(
+            logging.WARNING,
+            "Chunk not found in PPDB",
+            "ppdb_chunk_not_found",
+        )
+        return
+
+    # Read the chunk's manifest from GCS.
+    try:
+        manifest = Manifest.from_uri(folder)
+    except FileNotFoundError as e:
+        logger.log_event(
+            logging.ERROR,
+            "Chunk manifest not found in GCS",
+            "manifest_not_found",
+            error=e,
+            gcs_folder=folder,
+        )
+        return
+    except (ServerError, TooManyRequests) as e:
+        # Transient GCS errors that persisted through the retries done when
+        # reading. Raising triggers a Pub/Sub retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable error reading chunk manifest from GCS",
+            "retryable_manifest_read_error",
+            error=e,
+            gcs_folder=folder,
+        )
+        raise
+    except Exception as e:
+        logger.log_event(
+            logging.ERROR,
+            "Unexpected error while reading chunk manifest",
+            "unexpected_manifest_read_error",
+            error=e,
+            gcs_folder=folder,
+        )
+        return
+
+    # Check that none of the chunk's data is already in the BigQuery staging
+    # tables, which would cause duplicate records.
+    try:
+        staged_table_names = _find_staged_tables(
+            _bq_client, f"{PROJECT_ID}.{dataset_id}", chunk_id, manifest
+        )
+    except NotFound as e:
+        # Missing staging dataset or table is a configuration error.
+        logger.log_event(
+            logging.ERROR,
+            "BigQuery staging dataset or table not found",
+            "staging_resource_not_found",
+            error=e,
+        )
+        return
+    except (ServerError, TooManyRequests) as e:
+        # Transient BigQuery errors. Raising triggers a Pub/Sub retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable BigQuery error while validating chunk for staging",
+            "retryable_staging_check_error",
+            error=e,
+        )
+        raise
+    except Exception as e:
+        logger.log_event(
+            logging.ERROR,
+            "Unexpected error while validating chunk for staging",
+            "unexpected_chunk_validation_error",
+            error=e,
+        )
+        return
+
+    if staged_table_names:
+        logger.log_event(
+            logging.ERROR,
+            "Chunk already has staged data in BigQuery",
+            "chunk_already_staged",
+            table_names=staged_table_names,
+        )
+        return
+
+    # Claim the chunk by setting its status to staging. If the status of the
+    # chunk is not in a state that allows it to be staged, the update will
+    # fail.
+    try:
+        _ppdb.update_chunk_status(chunk_id, ChunkStatus.STAGING)
+    except ChunkStatusTransitionError as e:
+        logger.log_event(
+            logging.WARNING,
+            "Chunk could not be claimed for staging",
+            "chunk_claim_failed",
+            error=e,
+            current_status=e.current_status,
+            new_status=e.new_status,
+        )
+        return
+    except LookupError as e:
+        logger.log_event(
+            logging.WARNING,
+            "Chunk not found in PPDB",
+            "ppdb_chunk_not_found",
+            error=e,
+        )
+        return
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        # Raising a retryable error triggers a Pub/Sub retry.
+        if handle_database_error(logger, e):
+            raise
+        return
+
+    job_name = f"stage-chunk-{chunk_id}"
 
     launch_body = {
         "launchParameter": {
@@ -151,6 +321,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         response = request.execute(num_retries=NUM_RETRIES)
 
+        # The job is always present if the launch succeeded.
         if "job" not in response:
             logger.log_event(
                 logging.ERROR,
@@ -158,6 +329,17 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
                 "dataflow_response_missing_job",
                 dataflow_response=response,
             )
+            try:
+                _ppdb.update_chunk_status(chunk_id, ChunkStatus.FAILED)
+            except (ChunkStatusTransitionError, LookupError) as status_error:
+                logger.log_event(
+                    logging.ERROR,
+                    "Failed to mark chunk as failed after missing job",
+                    "chunk_status_update_failed",
+                    error=status_error,
+                )
+            except sqlalchemy.exc.SQLAlchemyError as status_error:
+                handle_database_error(logger, status_error)
             return
 
         job_id = response.get("job", {}).get("id", "unknown")
@@ -171,6 +353,21 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
     except Exception as e:
         retryable = handle_request_error(logger, e)
+
+        # Release the claim so the chunk is not left in staging. A failed
+        # chunk can be claimed again, so a Pub/Sub retry can still proceed.
+        try:
+            _ppdb.update_chunk_status(chunk_id, ChunkStatus.FAILED)
+        except (ChunkStatusTransitionError, LookupError) as status_error:
+            logger.log_event(
+                logging.ERROR,
+                "Failed to mark chunk as failed after launch error",
+                "chunk_status_update_failed",
+                error=status_error,
+            )
+        except sqlalchemy.exc.SQLAlchemyError as status_error:
+            handle_database_error(logger, status_error)
+
         if retryable:
             # Raising the exception should trigger a retry.
             raise
