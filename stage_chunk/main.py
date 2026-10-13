@@ -27,7 +27,7 @@ import functions_framework
 import google.auth
 import sqlalchemy.exc
 from cloudevents.http import CloudEvent
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import NotFound, ServerError, TooManyRequests
 from google.cloud import bigquery
 from googleapiclient.discovery import build
 from lsst.dax.ppdb.bigquery import (
@@ -156,10 +156,43 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
-    # Check that the chunk's status allows staging and that none of its data
-    # is already in the staging tables, which would cause duplicate records.
+    # Read the chunk's manifest from GCS.
     try:
         manifest = Manifest.from_uri(folder)
+    except FileNotFoundError as e:
+        logger.log_event(
+            logging.ERROR,
+            "Chunk manifest not found in GCS",
+            "manifest_not_found",
+            error=e,
+            gcs_folder=folder,
+        )
+        return
+    except (ServerError, TooManyRequests) as e:
+        # Transient GCS errors that persisted through the retries done when
+        # reading. Raising triggers a Pub/Sub retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable error reading chunk manifest from GCS",
+            "retryable_manifest_read_error",
+            error=e,
+            gcs_folder=folder,
+        )
+        raise
+    except Exception as e:
+        logger.log_event(
+            logging.ERROR,
+            "Unexpected error while reading chunk manifest",
+            "unexpected_manifest_read_error",
+            error=e,
+            gcs_folder=folder,
+        )
+        return
+
+    # Check that the chunk's status allows staging and that none of its data
+    # is already in the BigQuery staging tables, which would cause duplicate
+    # records.
+    try:
         bq_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
         validate_chunk_for_staging(
             chunk, manifest, f"{PROJECT_ID}.{dataset_id}", bq_client
@@ -179,6 +212,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             "Chunk already has staged data in BigQuery",
             "chunk_already_staged",
             error=e,
+            table_names=e.table_names,
         )
         return
     except NotFound as e:
@@ -190,11 +224,20 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             error=e,
         )
         return
+    except (ServerError, TooManyRequests) as e:
+        # Transient BigQuery errors. Raising triggers a Pub/Sub retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable BigQuery error while validating chunk for staging",
+            "retryable_staging_check_error",
+            error=e,
+        )
+        raise
     except Exception as e:
         logger.log_event(
             logging.ERROR,
             "Unexpected error while validating chunk for staging",
-            "chunk_validation_error",
+            "unexpected_chunk_validation_error",
             error=e,
         )
         return
