@@ -125,11 +125,24 @@ def track_chunk(event: CloudEvent) -> None:
         )
         return
 
+    try:
+        chunk_status = ChunkStatus(new_status)
+    except ValueError as e:
+        logger.log_event(
+            logging.ERROR,
+            "Invalid 'status' in values for update operation",
+            "invalid_status",
+            error=e,
+            apdb_replica_chunk=apdb_replica_chunk,
+            values=values,
+        )
+        return
+
     # Attach chunk ID to subsequent log entries.
     log_fields.update(chunk_id=apdb_replica_chunk)
 
     try:
-        ppdb.update_chunk_status(int(apdb_replica_chunk), ChunkStatus(new_status))
+        ppdb.update_chunk_status(int(apdb_replica_chunk), chunk_status)
     except LookupError as e:
         # The chunk does not exist. This error is not retryable.
         logger.log_event(
