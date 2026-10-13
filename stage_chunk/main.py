@@ -310,6 +310,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         response = request.execute(num_retries=NUM_RETRIES)
 
+        # The job is always present if the launch succeeded.
         if "job" not in response:
             logger.log_event(
                 logging.ERROR,
@@ -317,6 +318,17 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
                 "dataflow_response_missing_job",
                 dataflow_response=response,
             )
+            try:
+                PPDB.update_chunk_status(chunk_id, ChunkStatus.FAILED)
+            except (ChunkStatusTransitionError, LookupError) as status_error:
+                logger.log_event(
+                    logging.ERROR,
+                    "Failed to mark chunk as failed after missing job",
+                    "chunk_status_update_failed",
+                    error=status_error,
+                )
+            except sqlalchemy.exc.SQLAlchemyError as status_error:
+                handle_database_error(logger, status_error)
             return
 
         job_id = response.get("job", {}).get("id", "unknown")
