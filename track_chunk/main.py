@@ -25,7 +25,11 @@ from typing import Any
 import functions_framework
 import sqlalchemy.exc
 from cloudevents.http import CloudEvent
-from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery, UpdatableField
+from lsst.dax.ppdb.bigquery import (
+    ChunkStatus,
+    ChunkStatusTransitionError,
+    PpdbBigQuery,
+)
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
@@ -124,27 +128,26 @@ def track_chunk(event: CloudEvent) -> None:
     log_fields.update(chunk_id=apdb_replica_chunk)
 
     try:
-        chunk = ppdb.find_chunk_by_id(int(apdb_replica_chunk))
-        if not chunk:
-            logger.log_event(
-                logging.WARNING,
-                "Replica chunk not found",
-                "chunk_not_found",
-            )
-            return
-
-        update_count = ppdb.update_chunks(
-            [chunk.with_new_status(ChunkStatus(new_status))], {UpdatableField.STATUS}
-        )
+        ppdb.update_chunk_status(int(apdb_replica_chunk), ChunkStatus(new_status))
     except LookupError as e:
-        # Raised by update_chunks if the chunk was removed between the
-        # existence check above and the update. This is highly unlikely but
-        # trap for it just in case. This error is not retryable.
+        # The chunk does not exist. This error is not retryable.
         logger.log_event(
             logging.WARNING,
-            "Replica chunk no longer exists",
-            "chunk_not_found_during_update",
+            "Replica chunk not found",
+            "chunk_not_found",
             error=e,
+        )
+        return
+    except ChunkStatusTransitionError as e:
+        # The status change is not allowed from the chunk's current status.
+        # This error is not retryable.
+        logger.log_event(
+            logging.WARNING,
+            "Replica chunk status transition not allowed",
+            "invalid_status_transition",
+            error=e,
+            current_status=e.current_status,
+            new_status=e.new_status,
         )
         return
     except sqlalchemy.exc.OperationalError as e:
@@ -177,21 +180,9 @@ def track_chunk(event: CloudEvent) -> None:
         )
         return
 
-    if update_count < 1:
-        # This may not even be possible without another error occurring first,
-        # but log an error anyway. This is not retryable.
-        logger.log_event(
-            logging.ERROR,
-            "Failed to update replica chunk",
-            "chunk_update_failed",
-            values=values,
-        )
-        return
-
     logger.log_event(
         logging.INFO,
         "Updated replica chunk status",
         "replica_chunk_status_updated",
         values=values,
-        affected_rows=update_count,
     )
