@@ -40,12 +40,15 @@ from lsst.dax.ppdb.gcp import (
 setup_cloud_logging()
 _LOG = logging.getLogger("promote_chunks")
 
+# Setup PPDB BigQuery interface from environment variable configuration.
+_ppdb = PpdbBigQuery.from_env()
 
-def promote_chunks():
+
+def promote_chunks() -> None:
     logger = CloudEventLogger(_LOG)
 
     try:
-        promotable_chunks = ppdb.get_promotable_chunks()
+        promotable_chunks = _ppdb.get_promotable_chunks()
     except sqlalchemy.exc.SQLAlchemyError as e:
         handle_database_error(logger, e)
         raise
@@ -59,7 +62,7 @@ def promote_chunks():
 
     try:
         # Execute the promotion process.
-        promoter = ChunkPromoter(ppdb, logger)
+        promoter = ChunkPromoter(_ppdb, logger)
         promoter.promote_chunks(promotable_chunks)
     except NoPromotableChunksError as e:
         # No promotable chunks were found. This is handled as an error
@@ -107,6 +110,5 @@ def promote_chunks():
 
 if __name__ == "__main__":
     _LOG.info("Promote Chunks Job starting")
-    ppdb = PpdbBigQuery.from_env()
     promote_chunks()
     _LOG.info("Promote Chunks Job finished")

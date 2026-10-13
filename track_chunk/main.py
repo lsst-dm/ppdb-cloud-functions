@@ -42,8 +42,8 @@ from lsst.dax.ppdb.gcp import (
 setup_cloud_logging()
 _LOG = logging.getLogger("track_chunk")
 
-# Setup PPDB BigQuery interface from environment variable configuration
-ppdb = PpdbBigQuery.from_env()
+# Setup PPDB BigQuery interface from environment variable configuration.
+_ppdb = PpdbBigQuery.from_env()
 
 
 @functions_framework.cloud_event
@@ -142,7 +142,7 @@ def track_chunk(event: CloudEvent) -> None:
     log_fields.update(chunk_id=apdb_replica_chunk)
 
     try:
-        ppdb.update_chunk_status(int(apdb_replica_chunk), chunk_status)
+        _ppdb.update_chunk_status(int(apdb_replica_chunk), chunk_status)
     except LookupError as e:
         # The chunk does not exist. This error is not retryable.
         logger.log_event(

@@ -62,16 +62,16 @@ GOOGLE_CLOUD_SUBNETWORK = os.environ.get("GOOGLE_CLOUD_SUBNETWORK")
 NUM_RETRIES = int(os.environ["NUM_RETRIES"])
 
 _credentials, _ = google.auth.default()
-
 _dataflow_client = build(
     "dataflow",
     "v1b3",
     credentials=_credentials,
     cache_discovery=False,
 )
+_bq_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
 
-# Setup PPDB BigQuery interface from environment variable configuration
-PPDB = PpdbBigQuery.from_env()
+# Setup PPDB BigQuery interface from environment variable configuration.
+_ppdb = PpdbBigQuery.from_env()
 
 
 def _find_staged_tables(
@@ -162,7 +162,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
 
     # Get the chunk's metadata from the PPDB Postgres database.
     try:
-        chunk = PPDB.find_chunk_by_id(chunk_id)
+        chunk = _ppdb.find_chunk_by_id(chunk_id)
     except sqlalchemy.exc.SQLAlchemyError as e:
         # Raising a retryable error triggers a Pub/Sub retry.
         if handle_database_error(logger, e):
@@ -214,9 +214,8 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
     # Check that none of the chunk's data is already in the BigQuery staging
     # tables, which would cause duplicate records.
     try:
-        bq_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
         staged_table_names = _find_staged_tables(
-            bq_client, f"{PROJECT_ID}.{dataset_id}", chunk_id, manifest
+            _bq_client, f"{PROJECT_ID}.{dataset_id}", chunk_id, manifest
         )
     except NotFound as e:
         # Missing staging dataset or table is a configuration error.
@@ -254,11 +253,11 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
-    # Claim the chunk by setting its status to staging. Only one caller can
-    # succeed, so duplicate deliveries of the same message cannot launch more
-    # than one Dataflow job for the chunk.
+    # Claim the chunk by setting its status to staging. If the status of the
+    # chunk is not in a state that allows it to be staged, the update will
+    # fail.
     try:
-        PPDB.update_chunk_status(chunk_id, ChunkStatus.STAGING)
+        _ppdb.update_chunk_status(chunk_id, ChunkStatus.STAGING)
     except ChunkStatusTransitionError as e:
         logger.log_event(
             logging.WARNING,
@@ -331,7 +330,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
                 dataflow_response=response,
             )
             try:
-                PPDB.update_chunk_status(chunk_id, ChunkStatus.FAILED)
+                _ppdb.update_chunk_status(chunk_id, ChunkStatus.FAILED)
             except (ChunkStatusTransitionError, LookupError) as status_error:
                 logger.log_event(
                     logging.ERROR,
@@ -358,7 +357,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         # Release the claim so the chunk is not left in staging. A failed
         # chunk can be claimed again, so a Pub/Sub retry can still proceed.
         try:
-            PPDB.update_chunk_status(chunk_id, ChunkStatus.FAILED)
+            _ppdb.update_chunk_status(chunk_id, ChunkStatus.FAILED)
         except (ChunkStatusTransitionError, LookupError) as status_error:
             logger.log_event(
                 logging.ERROR,
