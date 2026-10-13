@@ -21,6 +21,7 @@
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import functions_framework
@@ -35,11 +36,6 @@ from lsst.dax.ppdb.bigquery import (
     ChunkStatusTransitionError,
     Manifest,
     PpdbBigQuery,
-)
-from lsst.dax.ppdb.bigquery.ingest import (
-    ChunkAlreadyStagedError,
-    InvalidChunkStatusError,
-    validate_chunk_for_staging,
 )
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
@@ -76,6 +72,32 @@ _dataflow_client = build(
 
 # Setup PPDB BigQuery interface from environment variable configuration
 PPDB = PpdbBigQuery.from_env()
+
+
+def _find_staged_tables(
+    bq_client: bigquery.Client, dataset_fqn: str, chunk_id: int, manifest: Manifest
+) -> list[str]:
+    """Return the names of the staging tables that already contain rows for
+    the chunk.
+    """
+    if manifest.is_empty_chunk:
+        return []
+
+    location = bq_client.get_dataset(dataset_fqn).location
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("chunk_id", "INT64", chunk_id)]
+    )
+    staged_table_names = []
+    for file_name in manifest.files:
+        table_name = Path(file_name).stem
+        sql = (
+            f"SELECT COUNT(*) FROM `{dataset_fqn}.{table_name}` "
+            "WHERE apdb_replica_chunk = @chunk_id"
+        )
+        job = bq_client.query(sql, job_config=job_config, location=location)
+        if next(iter(job.result()))[0] > 0:
+            staged_table_names.append(table_name)
+    return staged_table_names
 
 
 @functions_framework.cloud_event
@@ -189,32 +211,13 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
-    # Check that the chunk's status allows staging and that none of its data
-    # is already in the BigQuery staging tables, which would cause duplicate
-    # records.
+    # Check that none of the chunk's data is already in the BigQuery staging
+    # tables, which would cause duplicate records.
     try:
         bq_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
-        validate_chunk_for_staging(
-            chunk, manifest, f"{PROJECT_ID}.{dataset_id}", bq_client
+        staged_table_names = _find_staged_tables(
+            bq_client, f"{PROJECT_ID}.{dataset_id}", chunk_id, manifest
         )
-    except InvalidChunkStatusError as e:
-        logger.log_event(
-            logging.WARNING,
-            "Chunk is not in a valid state for staging",
-            "invalid_chunk_status",
-            error=e,
-            chunk_status=chunk.status,
-        )
-        return
-    except ChunkAlreadyStagedError as e:
-        logger.log_event(
-            logging.ERROR,
-            "Chunk already has staged data in BigQuery",
-            "chunk_already_staged",
-            error=e,
-            table_names=e.table_names,
-        )
-        return
     except NotFound as e:
         # Missing staging dataset or table is a configuration error.
         logger.log_event(
@@ -239,6 +242,15 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             "Unexpected error while validating chunk for staging",
             "unexpected_chunk_validation_error",
             error=e,
+        )
+        return
+
+    if staged_table_names:
+        logger.log_event(
+            logging.ERROR,
+            "Chunk already has staged data in BigQuery",
+            "chunk_already_staged",
+            table_names=staged_table_names,
         )
         return
 
