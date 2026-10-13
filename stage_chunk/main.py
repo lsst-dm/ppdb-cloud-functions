@@ -30,7 +30,12 @@ from cloudevents.http import CloudEvent
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from googleapiclient.discovery import build
-from lsst.dax.ppdb.bigquery import Manifest, PpdbBigQuery
+from lsst.dax.ppdb.bigquery import (
+    ChunkStatus,
+    ChunkStatusTransitionError,
+    Manifest,
+    PpdbBigQuery,
+)
 from lsst.dax.ppdb.bigquery.ingest import (
     ChunkAlreadyStagedError,
     InvalidChunkStatusError,
@@ -208,6 +213,46 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
+    # Claim the chunk by setting its status to staging. Only one caller can
+    # succeed, so duplicate deliveries of the same message cannot launch more
+    # than one Dataflow job for the chunk.
+    try:
+        PPDB.update_chunk_status(chunk_id, ChunkStatus.STAGING)
+    except ChunkStatusTransitionError as e:
+        logger.log_event(
+            logging.WARNING,
+            "Chunk could not be claimed for staging",
+            "chunk_claim_failed",
+            error=e,
+            current_status=e.current_status,
+            new_status=e.new_status,
+        )
+        return
+    except LookupError as e:
+        logger.log_event(
+            logging.WARNING,
+            "Chunk not found in PPDB",
+            "ppdb_chunk_not_found",
+            error=e,
+        )
+        return
+    except sqlalchemy.exc.OperationalError as e:
+        logger.log_event(
+            logging.WARNING,
+            "Retryable database error while claiming chunk",
+            "retryable_database_error",
+            error=e,
+        )
+        raise
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        logger.log_event(
+            logging.ERROR,
+            "Error claiming chunk in PPDB",
+            "ppdb_chunk_claim_error",
+            error=e,
+        )
+        return
+
     job_name = f"stage-chunk-{chunk_id}"
 
     launch_body = {
@@ -267,6 +312,19 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
     except Exception as e:
         retryable = handle_request_error(logger, e)
+
+        # Release the claim so the chunk is not left in staging. A failed
+        # chunk can be claimed again, so a Pub/Sub retry can still proceed.
+        try:
+            PPDB.update_chunk_status(chunk_id, ChunkStatus.FAILED)
+        except Exception as status_error:
+            logger.log_event(
+                logging.ERROR,
+                "Failed to mark chunk as failed after launch error",
+                "chunk_status_update_failed",
+                error=status_error,
+            )
+
         if retryable:
             # Raising the exception should trigger a retry.
             raise
