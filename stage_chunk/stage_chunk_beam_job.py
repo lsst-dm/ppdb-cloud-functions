@@ -39,6 +39,7 @@ from apache_beam.options.pipeline_options import (
 from google.cloud import logging as cloud_logging
 from google.cloud import pubsub_v1, storage
 from lsst.dax.ppdb.bigquery import ChunkStatus, Manifest
+from lsst.dax.ppdb.gcp import CloudEventLogger
 
 # Configure Google Cloud logging
 cloud_logging.Client().setup_logging()
@@ -113,7 +114,6 @@ def read_parquet(pipeline: apache_beam.Pipeline, folder: str, name: str) -> PCol
         The transform to read the Parquet file.
     """
     parquet_path = posixpath.join(folder.rstrip("/"), name.lstrip("/"))
-    logging.info("Reading Parquet file: %s", parquet_path)
     return pipeline | f"Read{name}" >> ReadFromParquet(f"{parquet_path}")
 
 
@@ -138,7 +138,6 @@ def write_to_bigquery(
     transform: `apache_beam.PTransform`
         The transform to write the PCollection to BigQuery.
     """
-    logging.info("Writing to BigQuery table %s", table_fqn)
     return pcoll | f"Write{table_fqn}" >> WriteToBigQuery(
         table=table_fqn,
         create_disposition=BigQueryDisposition.CREATE_NEVER,
@@ -192,7 +191,6 @@ def read_manifest(chunk_id: int, folder: str) -> Manifest:
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     manifest_path = posixpath.join(object_prefix, Manifest.FILE_NAME)
-    logging.info(f"Reading manifest from: gs://{bucket_name}/{manifest_path}")
 
     # Download the manifest file and return its data.
     blob = bucket.blob(manifest_path)
@@ -201,12 +199,18 @@ def read_manifest(chunk_id: int, folder: str) -> Manifest:
 
 
 def publish_chunk_status(
-    project_id: str, topic_name: str, chunk_id: int, status: ChunkStatus
+    logger: CloudEventLogger,
+    project_id: str,
+    topic_name: str,
+    chunk_id: int,
+    status: ChunkStatus,
 ) -> None:
     """Publish a status update for the chunk to the tracking topic.
 
     Parameters
     ----------
+    logger : `CloudEventLogger`
+        Logger used to report the outcome of the publish.
     project_id : `str`
         The GCP project ID.
     topic_name : `str`
@@ -229,12 +233,24 @@ def publish_chunk_status(
     try:
         future = publisher.publish(topic_path, json.dumps(message).encode("utf-8"))
         future.result()  # Wait for the publish to complete
-        logging.info("Published message to topic %s: %s", topic_path, message)
-    except Exception:
-        logging.exception(
-            "Failed to publish message to topic %s: %s", topic_path, message
+    except Exception as e:
+        logger.log_event(
+            logging.ERROR,
+            "Failed to publish chunk status update",
+            "chunk_status_publish_failed",
+            error=e,
+            topic_path=topic_path,
+            pubsub_message=message,
         )
         raise
+
+    logger.log_event(
+        logging.INFO,
+        "Published chunk status update",
+        "chunk_status_published",
+        topic_path=topic_path,
+        pubsub_message=message,
+    )
 
 
 def run(argv: Optional[list[str]] = None) -> None:
@@ -254,8 +270,16 @@ def run(argv: Optional[list[str]] = None) -> None:
     chunk_id = int(custom_options.chunk_id)
     topic_name = custom_options.topic_name
 
-    logging.info(
-        f"Staging chunk {chunk_id} with folder {folder} into dataset `{dataset_id}` and topic `{topic_name}`."
+    logger = CloudEventLogger(
+        logging.getLogger("stage_chunk_beam_job"),
+        log_fields={"chunk_id": chunk_id, "dataset": dataset_id, "gcs_folder": folder},
+    )
+
+    logger.log_event(
+        logging.INFO,
+        "Staging chunk",
+        "chunk_staging_started",
+        topic_name=topic_name,
     )
 
     if ":" in dataset_id:
@@ -264,35 +288,61 @@ def run(argv: Optional[list[str]] = None) -> None:
         project_id = gcp_options.project
 
     try:
+        logger.log_event(logging.INFO, "Reading manifest", "manifest_reading")
         manifest = read_manifest(chunk_id, folder)
-        logging.info(
-            "Read manifest contents: %s",
-            manifest.model_dump_json(),
+        logger.log_event(
+            logging.INFO,
+            "Read manifest",
+            "manifest_read",
+            manifest=manifest.model_dump(mode="json"),
         )
 
         if manifest.is_empty_chunk:
-            logging.info("Chunk %d is empty. No data to stage.", chunk_id)
+            logger.log_event(
+                logging.INFO,
+                "Chunk is empty, no data to stage",
+                "empty_chunk",
+            )
             return
 
-        logging.info("Loading table files: %s", list(manifest.files))
+        logger.log_event(
+            logging.INFO,
+            "Loading table files",
+            "table_files_loading",
+            files=list(manifest.files),
+        )
 
         with apache_beam.Pipeline(options=options) as pipeline:
             for file_name in manifest.files:
-                data = read_parquet(pipeline, folder, file_name)
-
                 table_fqn = f"{project_id}:{dataset_id}.{Path(file_name).stem}"
+                logger.log_event(
+                    logging.INFO,
+                    "Loading parquet file into BigQuery table",
+                    "table_file_loading",
+                    file_name=file_name,
+                    table_fqn=table_fqn,
+                )
+
+                data = read_parquet(pipeline, folder, file_name)
 
                 write_to_bigquery(
                     data,
                     table_fqn,
                     temp_location,
                 )
-    except Exception:
-        logging.exception("Failed to stage chunk %d", chunk_id)
-        publish_chunk_status(project_id, topic_name, chunk_id, ChunkStatus.FAILED)
+    except Exception as e:
+        logger.log_event(
+            logging.ERROR,
+            "Failed to stage chunk",
+            "chunk_staging_failed",
+            error=e,
+        )
+        publish_chunk_status(
+            logger, project_id, topic_name, chunk_id, ChunkStatus.FAILED
+        )
         raise
 
-    publish_chunk_status(project_id, topic_name, chunk_id, ChunkStatus.STAGED)
+    publish_chunk_status(logger, project_id, topic_name, chunk_id, ChunkStatus.STAGED)
 
 
 if __name__ == "__main__":
