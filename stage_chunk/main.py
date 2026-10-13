@@ -31,10 +31,15 @@ from googleapiclient.discovery import build
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
+    cloud_run_initialize_sentry,
     decode_message_data,
+    flush_sentry,
     handle_request_error,
     setup_cloud_logging,
 )
+
+
+cloud_run_initialize_sentry()
 
 # Configure cloud logging.
 setup_cloud_logging()
@@ -62,6 +67,7 @@ _dataflow_client = build(
 
 
 @functions_framework.cloud_event
+@flush_sentry
 def trigger_stage_chunk(event: CloudEvent) -> None:
     """Cloud Function that launches a Dataflow job to stage chunks of PPDB
     data.
