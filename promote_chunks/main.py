@@ -23,13 +23,18 @@
 
 import logging
 
+import sqlalchemy.exc
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.chunk_promoter import (
     ChunkPromoter,
     ChunkPromotionError,
     NoPromotableChunksError,
 )
-from lsst.dax.ppdb.gcp import CloudEventLogger, setup_cloud_logging
+from lsst.dax.ppdb.gcp import (
+    CloudEventLogger,
+    handle_database_error,
+    setup_cloud_logging,
+)
 
 # Configure cloud logging.
 setup_cloud_logging()
@@ -39,7 +44,11 @@ _LOG = logging.getLogger("promote_chunks")
 def promote_chunks():
     logger = CloudEventLogger(_LOG)
 
-    promotable_chunks = ppdb.get_promotable_chunks()
+    try:
+        promotable_chunks = ppdb.get_promotable_chunks()
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        handle_database_error(logger, e)
+        raise
     chunk_count = len(promotable_chunks)
     logger.log_event(
         logging.INFO,

@@ -45,6 +45,7 @@ from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
     decode_message_data,
+    handle_database_error,
     handle_request_error,
     setup_cloud_logging,
 )
@@ -140,25 +141,10 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
     # Get the chunk's metadata from the PPDB Postgres database.
     try:
         chunk = PPDB.find_chunk_by_id(chunk_id)
-    except sqlalchemy.exc.OperationalError as e:
-        # Transient database errors, e.g. dropped connections, statement
-        # timeouts, and deadlocks. Raising triggers a Pub/Sub retry.
-        logger.log_event(
-            logging.WARNING,
-            "Retryable database error while retrieving chunk",
-            "retryable_database_error",
-            error=e,
-        )
-        raise
     except sqlalchemy.exc.SQLAlchemyError as e:
-        # Other database errors, e.g. integrity or programming errors, are
-        # not retryable.
-        logger.log_event(
-            logging.ERROR,
-            "Error retrieving chunk from PPDB",
-            "ppdb_chunk_retrieval_error",
-            error=e,
-        )
+        # Raising a retryable error triggers a Pub/Sub retry.
+        if handle_database_error(logger, e):
+            raise
         return
 
     # Check if the chunk was found in the database.
@@ -236,21 +222,10 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             error=e,
         )
         return
-    except sqlalchemy.exc.OperationalError as e:
-        logger.log_event(
-            logging.WARNING,
-            "Retryable database error while claiming chunk",
-            "retryable_database_error",
-            error=e,
-        )
-        raise
     except sqlalchemy.exc.SQLAlchemyError as e:
-        logger.log_event(
-            logging.ERROR,
-            "Error claiming chunk in PPDB",
-            "ppdb_chunk_claim_error",
-            error=e,
-        )
+        # Raising a retryable error triggers a Pub/Sub retry.
+        if handle_database_error(logger, e):
+            raise
         return
 
     job_name = f"stage-chunk-{chunk_id}"
@@ -317,13 +292,15 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         # chunk can be claimed again, so a Pub/Sub retry can still proceed.
         try:
             PPDB.update_chunk_status(chunk_id, ChunkStatus.FAILED)
-        except Exception as status_error:
+        except (ChunkStatusTransitionError, LookupError) as status_error:
             logger.log_event(
                 logging.ERROR,
                 "Failed to mark chunk as failed after launch error",
                 "chunk_status_update_failed",
                 error=status_error,
             )
+        except sqlalchemy.exc.SQLAlchemyError as status_error:
+            handle_database_error(logger, status_error)
 
         if retryable:
             # Raising the exception should trigger a retry.

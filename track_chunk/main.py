@@ -34,6 +34,7 @@ from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
     decode_message_data,
+    handle_database_error,
     setup_cloud_logging,
 )
 
@@ -150,25 +151,10 @@ def track_chunk(event: CloudEvent) -> None:
             new_status=e.new_status,
         )
         return
-    except sqlalchemy.exc.OperationalError as e:
-        # Transient Postgres errors, e.g. dropped connections, statement
-        # timeouts, and deadlocks. Raising triggers a Pub/Sub retry.
-        logger.log_event(
-            logging.WARNING,
-            "Retryable database error while updating replica chunk",
-            "retryable_database_error",
-            error=e,
-        )
-        raise
     except sqlalchemy.exc.SQLAlchemyError as e:
-        # Other database errors, e.g. integrity or programming errors, are
-        # not retryable.
-        logger.log_event(
-            logging.ERROR,
-            "Database error while updating replica chunk",
-            "database_error",
-            error=e,
-        )
+        # Raising a retryable error triggers a Pub/Sub retry.
+        if handle_database_error(logger, e):
+            raise
         return
     except Exception as e:
         # Catch-all for unexpected errors; not considered retryable.
