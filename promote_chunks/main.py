@@ -22,6 +22,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import logging
+import os
 
 from lsst.dax.ppdb.bigquery import PpdbBigQuery
 from lsst.dax.ppdb.bigquery.chunk_promoter import (
@@ -31,22 +32,70 @@ from lsst.dax.ppdb.bigquery.chunk_promoter import (
 )
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
-    cloud_run_initialize_sentry,
-    flush_sentry,
-    setup_cloud_logging,
+    # setup_cloud_logging,
 )
 
+from google.cloud.logging_v2.handlers import StructuredLogHandler, setup_logging
 
-cloud_run_initialize_sentry()
+
+def _debug_logging(phase: str, logger: logging.Logger | None = None) -> None:
+    logger = logger or logging.getLogger()
+    logging.info(
+        f"::::{phase} Active logging handlers: %s",
+        [type(h).__name__ for h in logger.handlers],
+    )
+    # for var in [
+    #     "GAE_SERVICE",
+    #     "GAE_VERSION",
+    #     "GAE_INSTANCE",
+    #     "FUNCTION_TARGET",
+    #     "FUNCTION_SIGNATURE_TYPE",
+    #     "FUNCTION_NAME",
+    #     "FUNCTION_REGION",
+    #     "ENTRY_POINT",
+    #     "K_SERVICE",
+    #     "K_REVISION",
+    #     "K_CONFIGURATION",
+    #     "CLOUD_RUN_JOB",
+    #     "CLOUD_RUN_EXECUTION",
+    #     "CLOUD_RUN_TASK_INDEX",
+    #     "CLOUD_RUN_TASK_ATTEMPT",
+    # ]:
+    #     logging.info(
+    #         f"::::{phase} {var}: In os.environ: {var in os.environ}, {os.environ.get(var)}"
+    #     )
+
+
+def setup_cloud_logging() -> None:
+    """Set up Cloud Logging and configure the root logger."""
+    # _debug_logging(phase="start-setup-cloud-logging")
+    # cloud_logging.Client().setup_logging()  # Redirects standard logging to Cloud Logging
+
+    log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
+    setup_logging(StructuredLogHandler(), log_level=log_level)
+    # _debug_logging(phase="mid-setup-cloud-logging")
+
+    # Silence noisy warnings from google-auth-httplib2.
+    logging.getLogger("google_auth_httplib2").setLevel(logging.ERROR)
+    # _debug_logging(phase="finish-setup-cloud-logging")
+
+
+# _debug_logging(phase="outside-before-sentry")
+# cloud_run_initialize_sentry()
 
 # Configure cloud logging.
+# _debug_logging(phase="outside-before-setup")
 setup_cloud_logging()
+# _debug_logging(phase="outside-after-setup")
 _LOG = logging.getLogger("promote_chunks")
 
 
 def promote_chunks():
     logger = CloudEventLogger(_LOG)
     ppdb = PpdbBigQuery.from_env()
+
+    # _debug_logging(phase="inside", logger=_LOG)
 
     promotable_chunks = ppdb.get_promotable_chunks()
     chunk_count = len(promotable_chunks)
@@ -105,7 +154,7 @@ def promote_chunks():
     )
 
 
-@flush_sentry
+# @flush_sentry
 def main() -> None:
     _LOG.info("Promote Chunks Job starting")
     promote_chunks()
