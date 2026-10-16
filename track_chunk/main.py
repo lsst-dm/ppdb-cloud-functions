@@ -22,11 +22,9 @@
 import logging
 from typing import Any
 
-
-from cloudevents.http import CloudEvent
 import functions_framework
 import sqlalchemy.exc
-
+from cloudevents.http import CloudEvent
 from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery, UpdatableField
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
@@ -37,15 +35,11 @@ from lsst.dax.ppdb.gcp import (
     setup_cloud_logging,
 )
 
-
 cloud_run_initialize_sentry()
 
 # Configure cloud logging.
 setup_cloud_logging()
 _LOG = logging.getLogger("track_chunk")
-
-# Setup PPDB BigQuery interface from environment variable configuration
-ppdb = PpdbBigQuery.from_env()
 
 
 @functions_framework.cloud_event
@@ -133,18 +127,20 @@ def track_chunk(event: CloudEvent) -> None:
     log_fields.update(chunk_id=apdb_replica_chunk)
 
     try:
-        chunk = ppdb.find_chunk_by_id(int(apdb_replica_chunk))
-        if not chunk:
-            logger.log_event(
-                logging.WARNING,
-                "Replica chunk not found",
-                "chunk_not_found",
-            )
-            return
+        with PpdbBigQuery.from_env() as ppdb:
+            chunk = ppdb.find_chunk_by_id(int(apdb_replica_chunk))
+            if not chunk:
+                logger.log_event(
+                    logging.WARNING,
+                    "Replica chunk not found",
+                    "chunk_not_found",
+                )
+                return
 
-        update_count = ppdb.update_chunks(
-            [chunk.with_new_status(ChunkStatus(new_status))], {UpdatableField.STATUS}
-        )
+            update_count = ppdb.update_chunks(
+                [chunk.with_new_status(ChunkStatus(new_status))],
+                {UpdatableField.STATUS},
+            )
     except LookupError as e:
         # Raised by update_chunks if the chunk was removed between the
         # existence check above and the update. This is highly unlikely but
