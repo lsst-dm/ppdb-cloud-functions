@@ -36,7 +36,6 @@ from lsst.dax.ppdb.gcp import (
     setup_cloud_logging,
 )
 
-
 cloud_run_initialize_sentry()
 
 # Configure cloud logging.
@@ -46,63 +45,62 @@ _LOG = logging.getLogger("promote_chunks")
 
 def promote_chunks():
     logger = CloudEventLogger(_LOG)
-    ppdb = PpdbBigQuery.from_env()
-
-    promotable_chunks = ppdb.get_promotable_chunks()
-    chunk_count = len(promotable_chunks)
-    logger.log_event(
-        logging.INFO,
-        "Found promotable chunks",
-        "promotable_chunks_found",
-        chunk_count=chunk_count,
-    )
-
-    try:
-        # Execute the promotion process.
-        promoter = ChunkPromoter(ppdb, logger)
-        promoter.promote_chunks(promotable_chunks)
-    except NoPromotableChunksError as e:
-        # No promotable chunks were found. This is handled as an error
-        # condition for control flow but may occur normally if no new chunks
-        # were staged for promotion. The message is emitted at `WARNING` level
-        # to improve visibility. No error is raised in this circumstance.
+    with PpdbBigQuery.from_env() as ppdb:
+        promotable_chunks = ppdb.get_promotable_chunks()
+        chunk_count = len(promotable_chunks)
         logger.log_event(
-            logging.WARNING,
-            "No promotable chunks found",
-            "no_promotable_chunks",
-            error=e,
+            logging.INFO,
+            "Found promotable chunks",
+            "promotable_chunks_found",
+            chunk_count=chunk_count,
         )
-    except ChunkPromotionError as e:
-        # An error occurred during the promotion process which was trapped by
-        # the `ChunkPromoter` instance. Re-raise the exception to propagate
-        # the error.
-        logger.log_event(
-            logging.ERROR,
-            "Error during chunk promotion",
-            "chunk_promotion_error",
-            error=e,
-        )
-        raise
-    except Exception as e:
-        # Catch any other unexpected exceptions so they can be logged. This
-        # should not occur under normal circumstances as `ChunkPromoter` is
-        # designed to handle all expected errors. Re-raise the unexpected
-        # exception to propagate the error.
-        logger.log_event(
-            logging.ERROR,
-            "Unexpected error while promoting chunks",
-            "unexpected_promotion_error",
-            error=e,
-        )
-        raise
 
-    # Promotion succeeded! Log the number of chunks promoted.
-    logger.log_event(
-        logging.INFO,
-        "Chunks promoted",
-        "chunks_promoted",
-        chunk_count=chunk_count,
-    )
+        try:
+            # Execute the promotion process.
+            promoter = ChunkPromoter(ppdb, logger)
+            promoter.promote_chunks(promotable_chunks)
+        except NoPromotableChunksError as e:
+            # No promotable chunks were found. This is handled as an error
+            # condition for control flow but may occur normally if no new chunks
+            # were staged for promotion. The message is emitted at `WARNING` level
+            # to improve visibility. No error is raised in this circumstance.
+            logger.log_event(
+                logging.WARNING,
+                "No promotable chunks found",
+                "no_promotable_chunks",
+                error=e,
+            )
+        except ChunkPromotionError as e:
+            # An error occurred during the promotion process which was trapped by
+            # the `ChunkPromoter` instance. Re-raise the exception to propagate
+            # the error.
+            logger.log_event(
+                logging.ERROR,
+                "Error during chunk promotion",
+                "chunk_promotion_error",
+                error=e,
+            )
+            raise
+        except Exception as e:
+            # Catch any other unexpected exceptions so they can be logged. This
+            # should not occur under normal circumstances as `ChunkPromoter` is
+            # designed to handle all expected errors. Re-raise the unexpected
+            # exception to propagate the error.
+            logger.log_event(
+                logging.ERROR,
+                "Unexpected error while promoting chunks",
+                "unexpected_promotion_error",
+                error=e,
+            )
+            raise
+
+        # Promotion succeeded! Log the number of chunks promoted.
+        logger.log_event(
+            logging.INFO,
+            "Chunks promoted",
+            "chunks_promoted",
+            chunk_count=chunk_count,
+        )
 
 
 @flush_sentry
