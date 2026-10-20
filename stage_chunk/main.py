@@ -21,14 +21,19 @@
 
 import logging
 import os
+import posixpath
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import functions_framework
 import google.auth
 import sqlalchemy.exc
 from cloudevents.http import CloudEvent
+from google.api_core.exceptions import NotFound
+from google.cloud import bigquery, storage
 from googleapiclient.discovery import build
-from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery
+from lsst.dax.ppdb.bigquery import ChunkStatus, Manifest, PpdbBigQuery
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
@@ -69,6 +74,48 @@ _dataflow_client = build(
     credentials=_credentials,
     cache_discovery=False,
 )
+
+_bigquery_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
+
+_storage_client = storage.Client(project=PROJECT_ID, credentials=_credentials)
+
+
+def _find_staged_tables(dataset_id: str, chunk_id: int, folder: str) -> list[str]:
+    """Find the staging tables that already have rows for a chunk.
+
+    The tables to check are the ones named by the files in the chunk's
+    manifest.
+
+    Parameters
+    ----------
+    dataset_id
+        The staging dataset, in the ``PROJECT_ID`` project.
+    chunk_id
+        The replica chunk ID.
+    folder
+        The GCS folder of the chunk, as ``gs://bucket/prefix``.
+
+    Returns
+    -------
+    `list` [ `str` ]
+        Names of the tables with at least one row for the chunk.
+    """
+    parsed = urlparse(folder)
+    manifest_path = posixpath.join(parsed.path.lstrip("/"), Manifest.FILE_NAME)
+    blob = _storage_client.bucket(parsed.netloc).blob(manifest_path)
+    manifest = Manifest.from_json_str(blob.download_as_text())
+
+    staged_tables = []
+    for file_name in manifest.files:
+        table_name = Path(file_name).stem
+        query = (
+            f"SELECT COUNT(*) FROM `{PROJECT_ID}.{dataset_id}.{table_name}` "
+            f"WHERE apdb_replica_chunk = {chunk_id}"
+        )
+        row_count = next(iter(_bigquery_client.query(query).result()))[0]
+        if row_count > 0:
+            staged_tables.append(table_name)
+    return staged_tables
 
 
 @functions_framework.cloud_event
@@ -157,6 +204,37 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             "invalid_chunk_status",
             status=str(chunk.status),
             allowed_statuses=sorted(str(s) for s in _STAGEABLE_STATUSES),
+        )
+        return
+
+    # Check that none of the chunk's data is already in the staging tables,
+    # which would cause duplicate records.
+    try:
+        staged_tables = _find_staged_tables(dataset_id, int(chunk_id), folder)
+    except NotFound as e:
+        # A missing manifest, staging dataset or table is not retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Manifest or staging table not found",
+            "staging_resource_not_found",
+            error=e,
+        )
+        return
+    except Exception as e:
+        retryable = handle_request_error(logger, e)
+        if retryable:
+            # Raising the exception should trigger a retry.
+            raise
+        else:
+            # Non-retryable error, just return.
+            return
+
+    if staged_tables:
+        logger.log_event(
+            logging.ERROR,
+            "Replica chunk already has rows in the staging tables",
+            "chunk_already_staged",
+            staged_tables=staged_tables,
         )
         return
 
