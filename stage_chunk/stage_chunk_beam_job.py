@@ -38,7 +38,7 @@ from apache_beam.options.pipeline_options import (
 )
 from google.cloud import logging as cloud_logging
 from google.cloud import pubsub_v1, storage
-from lsst.dax.ppdb.bigquery import Manifest
+from lsst.dax.ppdb.bigquery import ChunkStatus, Manifest
 from lsst.dax.ppdb.gcp import CloudEventLogger
 
 # Configure Google Cloud logging
@@ -199,7 +199,11 @@ def read_manifest(chunk_id: int, folder: str) -> Manifest:
 
 
 def update_chunk_status(
-    logger: CloudEventLogger, project_id: str, topic_name: str, chunk_id: int
+    logger: CloudEventLogger,
+    project_id: str,
+    topic_name: str,
+    chunk_id: int,
+    status: ChunkStatus,
 ) -> None:
     """Update the status of the chunk in the tracking database.
 
@@ -213,6 +217,8 @@ def update_chunk_status(
         The name of the Pub/Sub topic to publish the status update.
     chunk_id : `int`
         The ID of the chunk being processed.
+    status : `ChunkStatus`
+        The new status of the chunk.
     """
     publisher = pubsub_v1.PublisherClient()
     topic_path = publisher.topic_path(project_id, topic_name)
@@ -221,7 +227,7 @@ def update_chunk_status(
         "operation": "update",
         "apdb_replica_chunk": chunk_id,
         "values": {
-            "status": "staged",
+            "status": status.value,
         },
     }
     try:
@@ -275,6 +281,9 @@ def run(argv: Optional[list[str]] = None) -> None:
             "manifest_read_failed",
             error=e,
         )
+        update_chunk_status(
+            logger, project_id, topic_name, chunk_id, ChunkStatus.FAILED
+        )
         raise
 
     if manifest.is_empty_chunk:
@@ -300,10 +309,13 @@ def run(argv: Optional[list[str]] = None) -> None:
             error=e,
             files=list(manifest.files),
         )
+        update_chunk_status(
+            logger, project_id, topic_name, chunk_id, ChunkStatus.FAILED
+        )
         raise
 
     # Update the chunk status in the tracking database.
-    update_chunk_status(logger, project_id, topic_name, chunk_id)
+    update_chunk_status(logger, project_id, topic_name, chunk_id, ChunkStatus.STAGED)
 
 
 if __name__ == "__main__":
