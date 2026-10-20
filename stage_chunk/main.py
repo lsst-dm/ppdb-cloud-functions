@@ -25,14 +25,17 @@ from typing import Any
 
 import functions_framework
 import google.auth
+import sqlalchemy.exc
 from cloudevents.http import CloudEvent
 from googleapiclient.discovery import build
+from lsst.dax.ppdb.bigquery import ChunkStatus, PpdbBigQuery
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
     cloud_run_initialize_sentry,
     decode_message_data,
     flush_sentry,
+    handle_database_error,
     handle_request_error,
     setup_cloud_logging,
 )
@@ -54,6 +57,9 @@ TEMP_LOCATION = os.environ["TEMP_LOCATION"]
 TOPIC_NAME = os.environ["TOPIC_NAME"]
 GOOGLE_CLOUD_SUBNETWORK = os.environ.get("GOOGLE_CLOUD_SUBNETWORK")
 NUM_RETRIES = int(os.environ["NUM_RETRIES"])
+
+# Chunks with any other status are not staged.
+_STAGEABLE_STATUSES = {ChunkStatus.UPLOADED, ChunkStatus.FAILED}
 
 _credentials, _ = google.auth.default()
 
@@ -115,6 +121,44 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         "stage_chunk_request_received",
         gcs_folder=folder,
     )
+
+    try:
+        with PpdbBigQuery.from_env() as ppdb:
+            chunk = ppdb.find_chunk_by_id(int(chunk_id))
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        if handle_database_error(logger, e):
+            # Raising the exception should trigger a retry.
+            raise
+        else:
+            # Non-retryable error, just return.
+            return
+    except Exception as e:
+        # Other errors are not retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Error while reading replica chunk",
+            "chunk_read_error",
+            error=e,
+        )
+        return
+
+    if chunk is None:
+        logger.log_event(
+            logging.WARNING,
+            "Replica chunk not found",
+            "chunk_not_found",
+        )
+        return
+
+    if chunk.status not in _STAGEABLE_STATUSES:
+        logger.log_event(
+            logging.WARNING,
+            "Replica chunk has invalid status for staging",
+            "invalid_chunk_status",
+            status=str(chunk.status),
+            allowed_statuses=sorted(str(s) for s in _STAGEABLE_STATUSES),
+        )
+        return
 
     # No timestamp in the job name, so that Dataflow rejects a second active
     # job for the same chunk.
