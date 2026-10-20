@@ -33,7 +33,14 @@ from cloudevents.http import CloudEvent
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery, storage
 from googleapiclient.discovery import build
-from lsst.dax.ppdb.bigquery import ChunkStatus, Manifest, PpdbBigQuery
+from googleapiclient.errors import HttpError
+from lsst.dax.ppdb.bigquery import (
+    ChunkStatus,
+    Manifest,
+    PpdbBigQuery,
+    PpdbReplicaChunkExtended,
+    UpdatableField,
+)
 from lsst.dax.ppdb.gcp import (
     CloudEventLogger,
     DecodeMessageDataError,
@@ -116,6 +123,33 @@ def _find_staged_tables(dataset_id: str, chunk_id: int, folder: str) -> list[str
         if row_count > 0:
             staged_tables.append(table_name)
     return staged_tables
+
+
+def _mark_chunk_failed(
+    logger: CloudEventLogger, chunk: PpdbReplicaChunkExtended
+) -> None:
+    """Set the chunk's status to failed after its Dataflow job could not be
+    launched.
+
+    Parameters
+    ----------
+    logger
+        Logger used to report errors.
+    chunk
+        The replica chunk.
+    """
+    try:
+        with PpdbBigQuery.from_env() as ppdb:
+            ppdb.update_chunks(
+                [chunk.with_new_status(ChunkStatus.FAILED)], {UpdatableField.STATUS}
+            )
+    except Exception as e:
+        logger.log_event(
+            logging.ERROR,
+            "Failed to mark replica chunk as failed",
+            "chunk_status_update_failed",
+            error=e,
+        )
 
 
 @functions_framework.cloud_event
@@ -219,6 +253,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             "staging_resource_not_found",
             error=e,
         )
+        _mark_chunk_failed(logger, chunk)
         return
     except Exception as e:
         retryable = handle_request_error(logger, e)
@@ -286,6 +321,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
                 "dataflow_response_missing_job",
                 dataflow_response=response,
             )
+            _mark_chunk_failed(logger, chunk)
             return
 
         job_id = response.get("job", {}).get("id", "unknown")
@@ -303,7 +339,10 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             # Raising the exception should trigger a retry.
             raise
         else:
-            # Non-retryable error, just return.
+            # A 409 means a job for this chunk is already running, so the
+            # chunk has not failed.
+            if not (isinstance(e, HttpError) and e.resp.status == 409):
+                _mark_chunk_failed(logger, chunk)
             return
 
     return
