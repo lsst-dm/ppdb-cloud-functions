@@ -2,6 +2,8 @@ functions-framework
 google-auth
 google-api-core
 google-api-python-client
+google-cloud-bigquery
+google-cloud-storage
 google-cloud-functions
 
 lsst-dax-ppdb @ git+https://github.com/lsst/dax_ppdb@tickets/DM-54651-v2
