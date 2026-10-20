@@ -21,7 +21,6 @@
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any
 
 import functions_framework
@@ -117,8 +116,9 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         gcs_folder=folder,
     )
 
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
-    job_name = f"stage-chunk-{chunk_id}-{timestamp}"
+    # No timestamp in the job name, so that Dataflow rejects a second active
+    # job for the same chunk.
+    job_name = f"stage-chunk-{chunk_id}"
 
     launch_body = {
         "launchParameter": {
