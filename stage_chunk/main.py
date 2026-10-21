@@ -21,17 +21,20 @@
 
 import logging
 import os
-import posixpath
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import functions_framework
 import google.auth
 import sqlalchemy.exc
 from cloudevents.http import CloudEvent
-from google.api_core.exceptions import NotFound
-from google.cloud import bigquery, storage
+from google.api_core.exceptions import (
+    BadRequest,
+    Forbidden,
+    GoogleAPICallError,
+    NotFound,
+)
+from google.cloud import bigquery
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from lsst.dax.ppdb.bigquery import (
@@ -84,10 +87,10 @@ _dataflow_client = build(
 
 _bigquery_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
 
-_storage_client = storage.Client(project=PROJECT_ID, credentials=_credentials)
 
-
-def _find_staged_tables(dataset_id: str, chunk_id: int, folder: str) -> list[str]:
+def _find_staged_tables(
+    dataset_id: str, chunk_id: int, manifest: Manifest
+) -> list[str]:
     """Find the staging tables that already have rows for a chunk.
 
     The tables to check are the ones named by the files in the chunk's
@@ -99,19 +102,14 @@ def _find_staged_tables(dataset_id: str, chunk_id: int, folder: str) -> list[str
         The staging dataset, in the ``PROJECT_ID`` project.
     chunk_id
         The replica chunk ID.
-    folder
-        The GCS folder of the chunk, as ``gs://bucket/prefix``.
+    manifest
+        The chunk's manifest.
 
     Returns
     -------
     `list` [ `str` ]
         Names of the tables with at least one row for the chunk.
     """
-    parsed = urlparse(folder)
-    manifest_path = posixpath.join(parsed.path.lstrip("/"), Manifest.FILE_NAME)
-    blob = _storage_client.bucket(parsed.netloc).blob(manifest_path)
-    manifest = Manifest.from_json_str(blob.download_as_text())
-
     staged_tables = []
     for file_name in manifest.files:
         table_name = Path(file_name).stem
@@ -128,8 +126,7 @@ def _find_staged_tables(dataset_id: str, chunk_id: int, folder: str) -> list[str
 def _mark_chunk_failed(
     logger: CloudEventLogger, chunk: PpdbReplicaChunkExtended
 ) -> None:
-    """Set the chunk's status to failed after its Dataflow job could not be
-    launched.
+    """Set the chunk's status to failed after it could not be staged.
 
     Parameters
     ----------
@@ -177,7 +174,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
 
     try:
         dataset_id = data["dataset"]
-        chunk_id = data["chunk_id"]
+        chunk_id = int(data["chunk_id"])
         folder = data["folder"]
     except KeyError as e:
         # Non-retryable error, just log and return.
@@ -189,6 +186,16 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             missing_keys=[
                 key for key in ["dataset", "chunk_id", "folder"] if key not in data
             ],
+            pubsub_message=data,
+        )
+        return
+    except (ValueError, TypeError) as e:
+        # Non-retryable error, just log and return.
+        logger.log_event(
+            logging.WARNING,
+            "Invalid chunk_id in Pub/Sub message",
+            "invalid_chunk_id",
+            error=e,
             pubsub_message=data,
         )
         return
@@ -205,7 +212,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
 
     try:
         with PpdbBigQuery.from_env() as ppdb:
-            chunk = ppdb.find_chunk_by_id(int(chunk_id))
+            chunk = ppdb.find_chunk_by_id(chunk_id)
     except sqlalchemy.exc.SQLAlchemyError as e:
         if handle_database_error(logger, e):
             # Raising the exception should trigger a retry.
@@ -241,28 +248,82 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
-    # Check that none of the chunk's data is already in the staging tables,
-    # which would cause duplicate records.
+    # Read the chunk's manifest from Cloud Storage.
     try:
-        staged_tables = _find_staged_tables(dataset_id, int(chunk_id), folder)
-    except NotFound as e:
-        # A missing manifest, staging dataset or table is not retryable.
+        manifest = Manifest.from_uri(folder)
+    except (FileNotFoundError, Forbidden) as e:
+        # Permanent errors, which a retry would not fix: the manifest does not
+        # exist, or 403 Forbidden (missing permissions on the bucket).
         logger.log_event(
             logging.ERROR,
-            "Manifest or staging table not found",
-            "staging_resource_not_found",
+            "Failed to read the chunk manifest",
+            "manifest_read_failed",
             error=e,
         )
         _mark_chunk_failed(logger, chunk)
         return
+    except (GoogleAPICallError, ConnectionError, TimeoutError) as e:
+        # Other Cloud Storage errors, e.g. 429 Too Many Requests or a 5xx
+        # server error that is still failing after the retries made while
+        # reading, and network errors are treated as transient. Raising the
+        # exception should trigger a retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable error while reading the chunk manifest",
+            "manifest_read_retryable_error",
+            error=e,
+        )
+        raise
     except Exception as e:
-        retryable = handle_request_error(logger, e)
-        if retryable:
-            # Raising the exception should trigger a retry.
-            raise
-        else:
-            # Non-retryable error, just return.
-            return
+        # Other errors, e.g. an invalid manifest, are not retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Unexpected error while reading the chunk manifest",
+            "manifest_read_failed",
+            error=e,
+        )
+        _mark_chunk_failed(logger, chunk)
+        return
+
+    # Check that none of the chunk's data is already in the staging tables,
+    # which would cause duplicate records.
+    try:
+        staged_tables = _find_staged_tables(dataset_id, chunk_id, manifest)
+    except (NotFound, Forbidden, BadRequest) as e:
+        # Permanent errors, which a retry would not fix:
+        # - 404 Not Found: a missing staging dataset or table
+        # - 403 Forbidden: missing permissions on the dataset
+        # - 400 Bad Request: an invalid query
+        logger.log_event(
+            logging.ERROR,
+            "Failed to check the staging tables",
+            "staging_check_failed",
+            error=e,
+            http_status=e.code,
+        )
+        _mark_chunk_failed(logger, chunk)
+        return
+    except (GoogleAPICallError, ConnectionError, TimeoutError) as e:
+        # Other BigQuery errors, e.g. 429 Too Many Requests or a 5xx server
+        # error, and network errors are treated as transient. Raising the
+        # exception should trigger a retry.
+        logger.log_event(
+            logging.WARNING,
+            "Retryable error while checking the staging tables",
+            "staging_check_retryable_error",
+            error=e,
+        )
+        raise
+    except Exception as e:
+        # Other errors are not retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Unexpected error while checking the staging tables",
+            "staging_check_failed",
+            error=e,
+        )
+        _mark_chunk_failed(logger, chunk)
+        return
 
     if staged_tables:
         logger.log_event(
@@ -307,7 +368,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             "containerSpecGcsPath": DATAFLOW_TEMPLATE_PATH,
             "parameters": {
                 "dataset_id": dataset_id,
-                "chunk_id": chunk_id,
+                "chunk_id": str(chunk_id),
                 "folder": folder,
                 "topic_name": TOPIC_NAME,
             },
