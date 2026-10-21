@@ -273,6 +273,30 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         )
         return
 
+    # Set the status to staging, so that a duplicate message for the chunk is
+    # rejected by the status check above.
+    try:
+        with PpdbBigQuery.from_env() as ppdb:
+            ppdb.update_chunks(
+                [chunk.with_new_status(ChunkStatus.STAGING)], {UpdatableField.STATUS}
+            )
+    except sqlalchemy.exc.SQLAlchemyError as e:
+        if handle_database_error(logger, e):
+            # Raising the exception should trigger a retry.
+            raise
+        else:
+            # Non-retryable error, just return.
+            return
+    except Exception as e:
+        # Other errors are not retryable.
+        logger.log_event(
+            logging.ERROR,
+            "Error while updating replica chunk status to staging",
+            "chunk_status_update_failed",
+            error=e,
+        )
+        return
+
     # No timestamp in the job name, so that Dataflow rejects a second active
     # job for the same chunk.
     job_name = f"stage-chunk-{chunk_id}"
@@ -336,7 +360,9 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
     except Exception as e:
         retryable = handle_request_error(logger, e)
         if retryable:
-            # Raising the exception should trigger a retry.
+            # Mark the chunk as failed, so that the retried message passes the
+            # status check, then raise the exception to trigger a retry.
+            _mark_chunk_failed(logger, chunk)
             raise
         else:
             # A 409 means a job for this chunk is already running, so the
