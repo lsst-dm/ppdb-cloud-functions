@@ -1,18 +1,6 @@
 name: Dev - Load SSO Dataflow Push to Artifact Registry and Flex Template Upload
 
 on:
-  pull_request:
-    paths:
-      - 'load_sso/Dockerfile'
-      - 'load_sso/load_sso_beam_job.py'
-      - 'load_sso/requirements-dataflow.txt'
-  push:
-    branches:
-      - main
-    paths:
-      - 'load_sso/Dockerfile'
-      - 'load_sso/load_sso_beam_job.py'
-      - 'load_sso/requirements-dataflow.txt'
   workflow_dispatch:
 
 jobs:

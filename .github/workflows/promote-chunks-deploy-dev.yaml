@@ -1,18 +1,6 @@
 name: Dev - Promote Chunk Cloud Run Job Deploy
 
 on:
-  pull_request:
-    paths:
-      - 'promote_chunks/main.py'
-      - 'promote_chunks/requirements.txt'
-      - 'promote_chunks/Dockerfile'
-  push:
-    branches:
-      - main
-    paths:
-      - 'promote_chunks/main.py'
-      - 'promote_chunks/requirements.txt'
-      - 'promote_chunks/Dockerfile'
   workflow_dispatch:
 
 jobs:

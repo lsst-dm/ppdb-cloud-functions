@@ -1,18 +1,6 @@
 name: Dev - Dataflow Push to Artifact Registry and Flex Template Upload
 
 on:
-  pull_request:
-    paths:
-      - 'stage_chunk/Dockerfile'
-      - 'stage_chunk/stage_chunk_beam_job.py'
-      - 'stage_chunk/requirements-dataflow.txt'
-  push:
-    branches:
-      - main
-    paths:
-      - 'stage_chunk/Dockerfile'
-      - 'stage_chunk/stage_chunk_beam_job.py'
-      - 'stage_chunk/requirements-dataflow.txt'
   workflow_dispatch:
 
 jobs:
