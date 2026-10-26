@@ -1,16 +1,6 @@
 name: Dev - Track Chunk Cloud Run Deploy
 
 on:
-  pull_request:
-    paths:
-      - 'track_chunk/*.py'
-      - 'track_chunk/requirements.txt'
-  push:
-    branches:
-      - main
-    paths:
-      - 'track_chunk/*.py'
-      - 'track_chunk/requirements.txt'
   workflow_dispatch:
 
 jobs:
