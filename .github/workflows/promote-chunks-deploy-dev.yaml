@@ -2,6 +2,7 @@ name: Dev - Promote Chunk Cloud Run Job Deploy
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   deploy:

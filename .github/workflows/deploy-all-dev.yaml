@@ -1,0 +1,30 @@
+name: Dev - Deploy All Workloads
+
+on:
+  workflow_dispatch:
+
+# Independent jobs deploy all six workloads in parallel.
+jobs:
+  stage-chunk:
+    uses: ./.github/workflows/stage-chunk-deploy-dev.yaml
+    secrets: inherit
+
+  track-chunk:
+    uses: ./.github/workflows/track-chunk-deploy-dev.yaml
+    secrets: inherit
+
+  load-sso:
+    uses: ./.github/workflows/load-sso-deploy-dev.yaml
+    secrets: inherit
+
+  promote-chunks:
+    uses: ./.github/workflows/promote-chunks-deploy-dev.yaml
+    secrets: inherit
+
+  dataflow-build-flex:
+    uses: ./.github/workflows/dataflow-build-flex-deploy-dev.yaml
+    secrets: inherit
+
+  load-sso-build-flex:
+    uses: ./.github/workflows/load-sso-build-flex-deploy-dev.yaml
+    secrets: inherit
