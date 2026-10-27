@@ -419,6 +419,17 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             dataflow_job_name=job_name,
         )
     except Exception as e:
+        if isinstance(e, HttpError) and e.resp.status == 409:
+            # A 409 means a job for this chunk is already running, e.g. after
+            # a retried launch, so the chunk has not failed.
+            logger.log_event(
+                logging.WARNING,
+                "Dataflow job is already running for the chunk",
+                "dataflow_job_already_running",
+                error=e,
+                dataflow_job_name=job_name,
+            )
+            return
         retryable = handle_request_error(logger, e)
         if retryable:
             # Mark the chunk as failed, so that the retried message passes the
@@ -426,10 +437,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             _mark_chunk_failed(logger, chunk)
             raise
         else:
-            # A 409 means a job for this chunk is already running, so the
-            # chunk has not failed.
-            if not (isinstance(e, HttpError) and e.resp.status == 409):
-                _mark_chunk_failed(logger, chunk)
+            _mark_chunk_failed(logger, chunk)
             return
 
     return
