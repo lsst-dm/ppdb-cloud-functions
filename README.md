@@ -2,6 +2,12 @@
 
 This repository contains [Google Cloud Run](https://cloud.google.com/functions) functions for the Rubin Observatory's Prompt Products Database (PPDB) along with related scripts and configuration files.
 
+## GitHub Actions deployments
+
+To deploy all workloads, select **Dev - Deploy All Workloads**, **Int - Deploy All Workloads**, or **Prod - Deploy All Workloads** in the Actions tab and choose **Run workflow** with the desired branch or tag.
+
+Each workflow runs all of the workload deployment jobs in parallel, subject to runner availability and the existing GitHub environment approval rules. A failed deployment does not cancel the other deployments; check every job before retrying any failed workloads individually.
+
 There is currently a single function for triggering a [Dataflow](https://cloud.google.com/products/dataflow) job which loads table data into BigQuery from Parquet files in Google Cloud Storage (GCS). The implementation of this function is contained in the [stage_chunk](./stage_chunk) directory with the following files:
 
 - `build-container.sh` - Builds the Docker container for the Dataflow job

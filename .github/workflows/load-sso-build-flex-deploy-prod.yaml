@@ -2,6 +2,7 @@ name: Prod - Load SSO Dataflow Push to Artifact Registry and Flex Template Uploa
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   build-and-push:
