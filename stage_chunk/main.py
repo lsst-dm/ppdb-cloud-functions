@@ -90,7 +90,7 @@ _bigquery_client = bigquery.Client(project=PROJECT_ID, credentials=_credentials)
 
 def _find_staged_tables(
     dataset_id: str, chunk_id: int, manifest: Manifest
-) -> list[str]:
+) -> dict[str, int]:
     """Find the staging tables that already have rows for a chunk.
 
     The tables to check are the ones named by the files in the chunk's
@@ -107,19 +107,25 @@ def _find_staged_tables(
 
     Returns
     -------
-    `list` [ `str` ]
-        Names of the tables with at least one row for the chunk.
+    `dict` [ `str`, `int` ]
+        Number of rows for the chunk in each table that has any, by table
+        name.
     """
-    staged_tables = []
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("chunk_id", "INT64", chunk_id)]
+    )
+    staged_tables: dict[str, int] = {}
     for file_name in manifest.files:
         table_name = Path(file_name).stem
         query = (
-            f"SELECT COUNT(*) FROM `{PROJECT_ID}.{dataset_id}.{table_name}` "
-            f"WHERE apdb_replica_chunk = {chunk_id}"
+            "SELECT COUNT(*) AS row_count "
+            f"FROM `{PROJECT_ID}.{dataset_id}.{table_name}` "
+            "WHERE apdb_replica_chunk = @chunk_id"
         )
-        row_count = next(iter(_bigquery_client.query(query).result()))[0]
+        rows = list(_bigquery_client.query(query, job_config=job_config).result())
+        row_count = rows[0].row_count
         if row_count > 0:
-            staged_tables.append(table_name)
+            staged_tables[table_name] = row_count
     return staged_tables
 
 
