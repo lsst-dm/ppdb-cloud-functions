@@ -51,7 +51,7 @@ from lsst.dax.ppdb.gcp import (
     decode_message_data,
     flush_sentry,
     handle_database_error,
-    handle_request_error,
+    handle_dataflow_launch_error,
     setup_cloud_logging,
 )
 
@@ -436,7 +436,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
                 dataflow_job_name=job_name,
             )
             return
-        retryable = handle_request_error(logger, e)
+        retryable = handle_dataflow_launch_error(logger, e)
         if retryable:
             # Mark the chunk as failed, so that the retried message passes the
             # status check, then raise the exception to trigger a retry.
