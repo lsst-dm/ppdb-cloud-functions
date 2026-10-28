@@ -26,6 +26,7 @@ from typing import Any
 
 import functions_framework
 import google.auth
+import requests
 import sqlalchemy.exc
 from cloudevents.http import CloudEvent
 from google.api_core.exceptions import (
@@ -33,6 +34,7 @@ from google.api_core.exceptions import (
     GoogleAPICallError,
     TooManyRequests,
 )
+from google.auth.exceptions import TransportError
 from google.cloud import bigquery
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -150,7 +152,17 @@ def _is_transient(e: Exception) -> bool:
     # - All other 4xx errors, such as 400 Bad Request, 403 Forbidden and
     #   404 Not Found
     # - Any other exception
-    if isinstance(e, (TooManyRequests, ConnectionError, TimeoutError)):
+    if isinstance(
+        e,
+        (
+            TooManyRequests,
+            ConnectionError,
+            TimeoutError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            TransportError,
+        ),
+    ):
         return True
     return isinstance(e, GoogleAPICallError) and not isinstance(e, ClientError)
 
