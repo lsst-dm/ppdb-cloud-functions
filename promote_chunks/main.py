@@ -105,9 +105,7 @@ def promote_chunks():
 
 @flush_sentry
 def main() -> None:
-    _LOG.info("Promote Chunks Job starting")
     promote_chunks()
-    _LOG.info("Promote Chunks Job finished")
 
 
 if __name__ == "__main__":
