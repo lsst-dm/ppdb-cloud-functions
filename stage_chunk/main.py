@@ -39,6 +39,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from lsst.dax.ppdb.bigquery import (
     ChunkStatus,
+    InvalidManifestError,
     Manifest,
     PpdbBigQuery,
     PpdbReplicaChunkExtended,
@@ -280,8 +281,18 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             error=e,
         )
         raise
+    except InvalidManifestError as e:
+        # The manifest can't be parsed or validated. A retry would not fix it.
+        logger.log_event(
+            logging.ERROR,
+            "Invalid chunk manifest",
+            "manifest_invalid",
+            error=e,
+        )
+        _mark_chunk_failed(logger, chunk)
+        return
     except Exception as e:
-        # Other errors, e.g. an invalid manifest, are not retryable.
+        # Other errors are not expected and are not retryable.
         logger.log_event(
             logging.ERROR,
             "Unexpected error while reading the chunk manifest",
