@@ -29,17 +29,15 @@ import google.auth
 import sqlalchemy.exc
 from cloudevents.http import CloudEvent
 from google.api_core.exceptions import (
-    BadRequest,
-    Forbidden,
+    ClientError,
     GoogleAPICallError,
-    NotFound,
+    TooManyRequests,
 )
 from google.cloud import bigquery
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from lsst.dax.ppdb.bigquery import (
     ChunkStatus,
-    InvalidManifestError,
     Manifest,
     PpdbBigQuery,
     PpdbReplicaChunkExtended,
@@ -128,6 +126,33 @@ def _find_staged_tables(
         if row_count > 0:
             staged_tables[table_name] = row_count
     return staged_tables
+
+
+def _is_transient(e: Exception) -> bool:
+    """Return whether a Cloud Storage or BigQuery error is worth retrying.
+
+    Parameters
+    ----------
+    e
+        The exception.
+
+    Returns
+    -------
+    `bool`
+        `True` if the error is transient, `False` otherwise.
+    """
+    # Retryable:
+    # - 429 Too Many Requests
+    # - 5xx server errors, such as 500 Internal Server Error and
+    #   503 Service Unavailable
+    # - Network errors, such as a connection reset or a timeout
+    # Permanent:
+    # - All other 4xx errors, such as 400 Bad Request, 403 Forbidden and
+    #   404 Not Found
+    # - Any other exception
+    if isinstance(e, (TooManyRequests, ConnectionError, TimeoutError)):
+        return True
+    return isinstance(e, GoogleAPICallError) and not isinstance(e, ClientError)
 
 
 def _mark_chunk_failed(
@@ -222,11 +247,8 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             chunk = ppdb.find_chunk_by_id(chunk_id)
     except sqlalchemy.exc.SQLAlchemyError as e:
         if handle_database_error(logger, e):
-            # Raising the exception should trigger a retry.
             raise
-        else:
-            # Non-retryable error, just return.
-            return
+        return
     except Exception as e:
         # Other errors are not retryable.
         logger.log_event(
@@ -258,44 +280,21 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
     # Read the chunk's manifest from Cloud Storage.
     try:
         manifest = Manifest.from_uri(folder)
-    except (FileNotFoundError, Forbidden) as e:
-        # Permanent errors, which a retry would not fix: the manifest does not
-        # exist, or 403 Forbidden (missing permissions on the bucket).
+    except Exception as e:
+        if _is_transient(e):
+            # Raising the exception should trigger a retry.
+            logger.log_event(
+                logging.WARNING,
+                "Retryable error while reading the chunk manifest",
+                "manifest_read_retryable_error",
+                error=e,
+            )
+            raise
+        # Permanent errors, e.g. a missing or invalid manifest, or missing
+        # permissions on the bucket.
         logger.log_event(
             logging.ERROR,
             "Failed to read the chunk manifest",
-            "manifest_read_failed",
-            error=e,
-        )
-        _mark_chunk_failed(logger, chunk)
-        return
-    except (GoogleAPICallError, ConnectionError, TimeoutError) as e:
-        # Other Cloud Storage errors, e.g. 429 Too Many Requests or a 5xx
-        # server error that is still failing after the retries made while
-        # reading, and network errors are treated as transient. Raising the
-        # exception should trigger a retry.
-        logger.log_event(
-            logging.WARNING,
-            "Retryable error while reading the chunk manifest",
-            "manifest_read_retryable_error",
-            error=e,
-        )
-        raise
-    except InvalidManifestError as e:
-        # The manifest can't be parsed or validated. A retry would not fix it.
-        logger.log_event(
-            logging.ERROR,
-            "Invalid chunk manifest",
-            "manifest_invalid",
-            error=e,
-        )
-        _mark_chunk_failed(logger, chunk)
-        return
-    except Exception as e:
-        # Other errors are not expected and are not retryable.
-        logger.log_event(
-            logging.ERROR,
-            "Unexpected error while reading the chunk manifest",
             "manifest_read_failed",
             error=e,
         )
@@ -306,36 +305,21 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
     # which would cause duplicate records.
     try:
         staged_tables = _find_staged_tables(dataset_id, chunk_id, manifest)
-    except (NotFound, Forbidden, BadRequest) as e:
-        # Permanent errors, which a retry would not fix:
-        # - 404 Not Found: a missing staging dataset or table
-        # - 403 Forbidden: missing permissions on the dataset
-        # - 400 Bad Request: an invalid query
+    except Exception as e:
+        if _is_transient(e):
+            # Raising the exception should trigger a retry.
+            logger.log_event(
+                logging.WARNING,
+                "Retryable error while checking the staging tables",
+                "staging_check_retryable_error",
+                error=e,
+            )
+            raise
+        # Permanent errors, e.g. a missing staging dataset or table, missing
+        # permissions on the dataset, or an invalid query.
         logger.log_event(
             logging.ERROR,
             "Failed to check the staging tables",
-            "staging_check_failed",
-            error=e,
-            http_status=e.code,
-        )
-        _mark_chunk_failed(logger, chunk)
-        return
-    except (GoogleAPICallError, ConnectionError, TimeoutError) as e:
-        # Other BigQuery errors, e.g. 429 Too Many Requests or a 5xx server
-        # error, and network errors are treated as transient. Raising the
-        # exception should trigger a retry.
-        logger.log_event(
-            logging.WARNING,
-            "Retryable error while checking the staging tables",
-            "staging_check_retryable_error",
-            error=e,
-        )
-        raise
-    except Exception as e:
-        # Other errors are not retryable.
-        logger.log_event(
-            logging.ERROR,
-            "Unexpected error while checking the staging tables",
             "staging_check_failed",
             error=e,
         )
@@ -360,11 +344,8 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             )
     except sqlalchemy.exc.SQLAlchemyError as e:
         if handle_database_error(logger, e):
-            # Raising the exception should trigger a retry.
             raise
-        else:
-            # Non-retryable error, just return.
-            return
+        return
     except Exception as e:
         # Other errors are not retryable.
         logger.log_event(
@@ -426,7 +407,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             _mark_chunk_failed(logger, chunk)
             return
 
-        job_id = response.get("job", {}).get("id", "unknown")
+        job_id = response["job"].get("id", "unknown")
 
         logger.log_event(
             logging.INFO,
@@ -448,13 +429,11 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
             )
             return
         retryable = handle_dataflow_launch_error(logger, e)
+        # Mark the chunk as failed, so that a retried message passes the
+        # status check.
+        _mark_chunk_failed(logger, chunk)
         if retryable:
-            # Mark the chunk as failed, so that the retried message passes the
-            # status check, then raise the exception to trigger a retry.
-            _mark_chunk_failed(logger, chunk)
             raise
-        else:
-            _mark_chunk_failed(logger, chunk)
-            return
+        return
 
     return
