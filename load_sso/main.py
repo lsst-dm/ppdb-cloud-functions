@@ -33,7 +33,7 @@ from lsst.dax.ppdb.gcp import (
     cloud_run_initialize_sentry,
     decode_message_data,
     flush_sentry,
-    handle_request_error,
+    handle_dataflow_launch_error,
     setup_cloud_logging,
 )
 
@@ -182,6 +182,6 @@ def load_sso(event: CloudEvent) -> None:
             )
             return
 
-        if handle_request_error(logger, e):
+        if handle_dataflow_launch_error(logger, e):
             raise  # Will trigger retry
         return  # Acknowledge message
