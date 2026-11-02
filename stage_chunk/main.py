@@ -168,7 +168,7 @@ def _is_transient(e: Exception) -> bool:
 
 
 def _mark_chunk_failed(
-    logger: CloudEventLogger, chunk: PpdbReplicaChunkExtended
+    logger: CloudEventLogger, ppdb: PpdbBigQuery, chunk: PpdbReplicaChunkExtended
 ) -> None:
     """Set the chunk's status to failed after it could not be staged.
 
@@ -176,14 +176,15 @@ def _mark_chunk_failed(
     ----------
     logger
         Logger used to report errors.
+    ppdb
+        The PPDB holding the chunk tracking table.
     chunk
         The replica chunk.
     """
     try:
-        with PpdbBigQuery.from_env() as ppdb:
-            ppdb.update_chunks(
-                [chunk.with_new_status(ChunkStatus.FAILED)], {UpdatableField.STATUS}
-            )
+        ppdb.update_chunks(
+            [chunk.with_new_status(ChunkStatus.FAILED)], {UpdatableField.STATUS}
+        )
     except Exception as e:
         logger.log_event(
             logging.ERROR,
@@ -255,8 +256,7 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
     )
 
     try:
-        with PpdbBigQuery.from_env() as ppdb:
-            chunk = ppdb.find_chunk_by_id(chunk_id)
+        ppdb = PpdbBigQuery.from_env()
     except sqlalchemy.exc.SQLAlchemyError as e:
         if handle_database_error(logger, e):
             raise
@@ -265,184 +265,202 @@ def trigger_stage_chunk(event: CloudEvent) -> None:
         # Other errors are not retryable.
         logger.log_event(
             logging.ERROR,
-            "Error while reading replica chunk",
-            "chunk_read_error",
+            "Error while connecting to the PPDB",
+            "ppdb_connect_error",
             error=e,
         )
         return
 
-    if chunk is None:
-        logger.log_event(
-            logging.WARNING,
-            "Replica chunk not found",
-            "chunk_not_found",
-        )
-        return
-
-    if chunk.status not in _STAGEABLE_STATUSES:
-        logger.log_event(
-            logging.WARNING,
-            "Replica chunk has invalid status for staging",
-            "invalid_chunk_status",
-            status=str(chunk.status),
-            allowed_statuses=sorted(str(s) for s in _STAGEABLE_STATUSES),
-        )
-        return
-
-    # Read the chunk's manifest from Cloud Storage.
-    try:
-        manifest = Manifest.from_uri(folder)
-    except Exception as e:
-        if _is_transient(e):
-            # Raising the exception should trigger a retry.
+    with ppdb:
+        try:
+            chunk = ppdb.find_chunk_by_id(chunk_id)
+        except sqlalchemy.exc.SQLAlchemyError as e:
+            if handle_database_error(logger, e):
+                raise
+            return
+        except Exception as e:
+            # Other errors are not retryable.
             logger.log_event(
-                logging.WARNING,
-                "Retryable error while reading the chunk manifest",
-                "manifest_read_retryable_error",
+                logging.ERROR,
+                "Error while reading replica chunk",
+                "chunk_read_error",
                 error=e,
             )
-            raise
-        # Permanent errors, e.g. a missing or invalid manifest, or missing
-        # permissions on the bucket.
-        logger.log_event(
-            logging.ERROR,
-            "Failed to read the chunk manifest",
-            "manifest_read_failed",
-            error=e,
-        )
-        _mark_chunk_failed(logger, chunk)
-        return
+            return
 
-    # Check that none of the chunk's data is already in the staging tables,
-    # which would cause duplicate records.
-    try:
-        staged_tables = _find_staged_tables(dataset_id, chunk_id, manifest)
-    except Exception as e:
-        if _is_transient(e):
-            # Raising the exception should trigger a retry.
+        if chunk is None:
             logger.log_event(
                 logging.WARNING,
-                "Retryable error while checking the staging tables",
-                "staging_check_retryable_error",
+                "Replica chunk not found",
+                "chunk_not_found",
+            )
+            return
+
+        if chunk.status not in _STAGEABLE_STATUSES:
+            logger.log_event(
+                logging.WARNING,
+                "Replica chunk has invalid status for staging",
+                "invalid_chunk_status",
+                status=str(chunk.status),
+                allowed_statuses=sorted(str(s) for s in _STAGEABLE_STATUSES),
+            )
+            return
+
+        # Read the chunk's manifest from Cloud Storage.
+        try:
+            manifest = Manifest.from_uri(folder)
+        except Exception as e:
+            if _is_transient(e):
+                # Raising the exception should trigger a retry.
+                logger.log_event(
+                    logging.WARNING,
+                    "Retryable error while reading the chunk manifest",
+                    "manifest_read_retryable_error",
+                    error=e,
+                )
+                raise
+            # Permanent errors, e.g. a missing or invalid manifest, or missing
+            # permissions on the bucket.
+            logger.log_event(
+                logging.ERROR,
+                "Failed to read the chunk manifest",
+                "manifest_read_failed",
                 error=e,
             )
-            raise
-        # Permanent errors, e.g. a missing staging dataset or table, missing
-        # permissions on the dataset, or an invalid query.
-        logger.log_event(
-            logging.ERROR,
-            "Failed to check the staging tables",
-            "staging_check_failed",
-            error=e,
-        )
-        _mark_chunk_failed(logger, chunk)
-        return
+            _mark_chunk_failed(logger, ppdb, chunk)
+            return
 
-    if staged_tables:
-        logger.log_event(
-            logging.ERROR,
-            "Replica chunk already has rows in the staging tables",
-            "chunk_already_staged",
-            staged_tables=staged_tables,
-        )
-        return
+        # Check that none of the chunk's data is already in the staging tables,
+        # which would cause duplicate records.
+        try:
+            staged_tables = _find_staged_tables(dataset_id, chunk_id, manifest)
+        except Exception as e:
+            if _is_transient(e):
+                # Raising the exception should trigger a retry.
+                logger.log_event(
+                    logging.WARNING,
+                    "Retryable error while checking the staging tables",
+                    "staging_check_retryable_error",
+                    error=e,
+                )
+                raise
+            # Permanent errors, e.g. a missing staging dataset or table, missing
+            # permissions on the dataset, or an invalid query.
+            logger.log_event(
+                logging.ERROR,
+                "Failed to check the staging tables",
+                "staging_check_failed",
+                error=e,
+            )
+            _mark_chunk_failed(logger, ppdb, chunk)
+            return
 
-    # Set the status to staging, so that a duplicate message for the chunk is
-    # rejected by the status check above.
-    try:
-        with PpdbBigQuery.from_env() as ppdb:
+        if staged_tables:
+            logger.log_event(
+                logging.ERROR,
+                "Replica chunk already has rows in the staging tables",
+                "chunk_already_staged",
+                staged_tables=staged_tables,
+            )
+            return
+
+        # Set the status to staging, so that a duplicate message for the chunk is
+        # rejected by the status check above.
+        try:
             ppdb.update_chunks(
                 [chunk.with_new_status(ChunkStatus.STAGING)], {UpdatableField.STATUS}
             )
-    except sqlalchemy.exc.SQLAlchemyError as e:
-        if handle_database_error(logger, e):
-            raise
-        return
-    except Exception as e:
-        # Other errors are not retryable.
-        logger.log_event(
-            logging.ERROR,
-            "Error while updating replica chunk status to staging",
-            "chunk_status_update_failed",
-            error=e,
-        )
-        return
-
-    # No timestamp in the job name, so that Dataflow rejects a second active
-    # job for the same chunk.
-    job_name = f"stage-chunk-{chunk_id}"
-
-    launch_body = {
-        "launchParameter": {
-            "jobName": job_name,
-            "containerSpecGcsPath": DATAFLOW_TEMPLATE_PATH,
-            "parameters": {
-                "dataset_id": dataset_id,
-                "chunk_id": str(chunk_id),
-                "folder": folder,
-                "topic_name": TOPIC_NAME,
-            },
-            "environment": {
-                "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
-                "tempLocation": TEMP_LOCATION,
-                "subnetwork": GOOGLE_CLOUD_SUBNETWORK,
-            },
-        }
-    }
-
-    logger.log_event(
-        logging.INFO,
-        "Launching Dataflow job",
-        "dataflow_job_launching",
-        dataflow_job_name=job_name,
-        launch_parameters=launch_body["launchParameter"]["parameters"],
-        environment=launch_body["launchParameter"]["environment"],
-        container_spec_gcs_path=launch_body["launchParameter"]["containerSpecGcsPath"],
-    )
-
-    try:
-        request = (
-            _dataflow_client.projects()
-            .locations()
-            .flexTemplates()
-            .launch(projectId=PROJECT_ID, location=REGION, body=launch_body)
-        )
-        response = request.execute(num_retries=NUM_RETRIES)
-
-        if "job" not in response:
+        except sqlalchemy.exc.SQLAlchemyError as e:
+            if handle_database_error(logger, e):
+                raise
+            return
+        except Exception as e:
+            # Other errors are not retryable.
             logger.log_event(
                 logging.ERROR,
-                "Dataflow API response missing 'job' field",
-                "dataflow_response_missing_job",
-                dataflow_response=response,
+                "Error while updating replica chunk status to staging",
+                "chunk_status_update_failed",
+                error=e,
             )
-            _mark_chunk_failed(logger, chunk)
             return
 
-        job_id = response["job"].get("id", "unknown")
+        # No timestamp in the job name, so that Dataflow rejects a second active
+        # job for the same chunk.
+        job_name = f"stage-chunk-{chunk_id}"
+
+        launch_body = {
+            "launchParameter": {
+                "jobName": job_name,
+                "containerSpecGcsPath": DATAFLOW_TEMPLATE_PATH,
+                "parameters": {
+                    "dataset_id": dataset_id,
+                    "chunk_id": str(chunk_id),
+                    "folder": folder,
+                    "topic_name": TOPIC_NAME,
+                },
+                "environment": {
+                    "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
+                    "tempLocation": TEMP_LOCATION,
+                    "subnetwork": GOOGLE_CLOUD_SUBNETWORK,
+                },
+            }
+        }
 
         logger.log_event(
             logging.INFO,
-            "Dataflow job launched successfully",
-            "dataflow_job_launched",
-            dataflow_job_id=job_id,
+            "Launching Dataflow job",
+            "dataflow_job_launching",
             dataflow_job_name=job_name,
+            launch_parameters=launch_body["launchParameter"]["parameters"],
+            environment=launch_body["launchParameter"]["environment"],
+            container_spec_gcs_path=launch_body["launchParameter"][
+                "containerSpecGcsPath"
+            ],
         )
-    except Exception as e:
-        if isinstance(e, HttpError) and e.resp.status == 409:
-            # A 409 means a job for this chunk is already running, e.g. after
-            # a retried launch, so the chunk has not failed.
+
+        try:
+            request = (
+                _dataflow_client.projects()
+                .locations()
+                .flexTemplates()
+                .launch(projectId=PROJECT_ID, location=REGION, body=launch_body)
+            )
+            response = request.execute(num_retries=NUM_RETRIES)
+
+            if "job" not in response:
+                logger.log_event(
+                    logging.ERROR,
+                    "Dataflow API response missing 'job' field",
+                    "dataflow_response_missing_job",
+                    dataflow_response=response,
+                )
+                _mark_chunk_failed(logger, ppdb, chunk)
+                return
+
+            job_id = response["job"].get("id", "unknown")
+
             logger.log_event(
-                logging.WARNING,
-                "Dataflow job is already running for the chunk",
-                "dataflow_job_already_running",
-                error=e,
+                logging.INFO,
+                "Dataflow job launched successfully",
+                "dataflow_job_launched",
+                dataflow_job_id=job_id,
                 dataflow_job_name=job_name,
             )
-            return
-        retryable = handle_dataflow_launch_error(logger, e)
-        # Mark the chunk as failed, so that a retried message passes the
-        # status check.
-        _mark_chunk_failed(logger, chunk)
-        if retryable:
-            raise
+        except Exception as e:
+            if isinstance(e, HttpError) and e.resp.status == 409:
+                # A 409 means a job for this chunk is already running, e.g. after
+                # a retried launch, so the chunk has not failed.
+                logger.log_event(
+                    logging.WARNING,
+                    "Dataflow job is already running for the chunk",
+                    "dataflow_job_already_running",
+                    error=e,
+                    dataflow_job_name=job_name,
+                )
+                return
+            retryable = handle_dataflow_launch_error(logger, e)
+            # Mark the chunk as failed, so that a retried message passes the
+            # status check.
+            _mark_chunk_failed(logger, ppdb, chunk)
+            if retryable:
+                raise
