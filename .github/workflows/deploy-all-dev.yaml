@@ -3,14 +3,10 @@ name: Dev - Deploy All Workloads
 on:
   workflow_dispatch:
 
-# Independent jobs deploy all six workloads in parallel.
+# Independent jobs deploy all five workloads in parallel.
 jobs:
   stage-chunk:
     uses: ./.github/workflows/stage-chunk-deploy-dev.yaml
-    secrets: inherit
-
-  track-chunk:
-    uses: ./.github/workflows/track-chunk-deploy-dev.yaml
     secrets: inherit
 
   load-sso:

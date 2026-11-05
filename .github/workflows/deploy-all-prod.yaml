@@ -3,14 +3,10 @@ name: Prod - Deploy All Workloads
 on:
   workflow_dispatch:
 
-# Independent jobs deploy all six workloads in parallel.
+# Independent jobs deploy all five workloads in parallel.
 jobs:
   stage-chunk:
     uses: ./.github/workflows/stage-chunk-deploy-prod.yaml
-    secrets: inherit
-
-  track-chunk:
-    uses: ./.github/workflows/track-chunk-deploy-prod.yaml
     secrets: inherit
 
   load-sso:
