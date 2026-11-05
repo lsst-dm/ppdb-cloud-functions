@@ -196,7 +196,7 @@ def _mark_chunk_failed(
 
 @functions_framework.cloud_event
 @flush_sentry
-def trigger_stage_chunk(event: CloudEvent) -> None:
+def stage_chunk(event: CloudEvent) -> None:
     """Cloud Function that launches a Dataflow job to stage chunks of PPDB
     data.
 
