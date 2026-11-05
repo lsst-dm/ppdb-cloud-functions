@@ -8,15 +8,4 @@ To deploy all workloads, select **Dev - Deploy All Workloads**, **Int - Deploy A
 
 Each workflow runs all of the workload deployment jobs in parallel, subject to runner availability and the existing GitHub environment approval rules. A failed deployment does not cancel the other deployments; check every job before retrying any failed workloads individually.
 
-There is currently a single function for triggering a [Dataflow](https://cloud.google.com/products/dataflow) job which loads table data into BigQuery from Parquet files in Google Cloud Storage (GCS). The implementation of this function is contained in the [stage_chunk](./stage_chunk) directory with the following files:
-
-- `build-container.sh` - Builds the Docker container for the Dataflow job
-- `build-flex-template.sh` - Deploys the [flex template](https://cloud.google.com/dataflow/docs/guides/templates/using-flex-templates) for the Dataflow job
-- `deploy-function.sh` - Deploys the Cloud Function to listen for events on the `stage-chunk-topic` Pub/Sub topic
-- `Dockerfile` - Dockerfile for the Dataflow job which launches the [Apache Beam](https://beam.apache.org/) script
-- `main.py` - Implementation of the Cloud Function which triggers the Dataflow job. The function accepts the name of a GCS bucket and prefix containing the Parquet files for a replica chunk, e.g., `gs://rubin-ppdb-test-bucket-1/data/tmp/2025/04/23/1737056400`.
-- `Makefile` - Makefile with helpful targets for deploying and tearing down the Cloud Function. Typing `make` will print all available targets.
-- `metadata.json` - Required metadata for the Dataflow job
-- `requirements.txt` - Python dependencies for the Dataflow job
-- `stage_chunk_beam_job.py` - [Apache Beam](https://beam.apache.org/) script for loading the data into BigQuery from Parquet files in GCS.
-- `teardown.sh` - Script to teardown the Cloud Function and Dataflow configuration, including deleting the Docker image, removing the flex template, etc.
+The [stage_chunk](./stage_chunk) function stages a replica chunk in BigQuery when a message for it arrives on the `stage-chunk-topic` Pub/Sub topic. It uses `ChunkStager` from [dax_ppdb](https://github.com/lsst/dax_ppdb), which loads the chunk's Parquet files from Google Cloud Storage (GCS) with BigQuery load jobs and copies them into the staging tables in one transaction.
