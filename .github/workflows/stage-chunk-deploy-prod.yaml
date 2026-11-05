@@ -12,13 +12,13 @@ jobs:
     env:
       PROJECT_ID: ${{ vars.GCP_PROD_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION }}
-      SERVICE_NAME: trigger-stage-chunk
+      SERVICE_NAME: stage-chunk
       APP_SOURCE_PATH: stage_chunk
       RUNTIME: 'python313'
-      ENTRY_POINT: 'trigger_stage_chunk'
-      CPU: ${{ vars.TRIGGER_STAGE_CHUNK_CPU }}
-      MEMORY: ${{ vars.TRIGGER_STAGE_CHUNK_MEMORY }}
-      TIMEOUT: ${{ vars.TRIGGER_STAGE_CHUNK_TIMEOUT }}
+      ENTRY_POINT: 'stage_chunk'
+      CPU: ${{ vars.STAGE_CHUNK_CPU }}
+      MEMORY: ${{ vars.STAGE_CHUNK_MEMORY }}
+      TIMEOUT: ${{ vars.STAGE_CHUNK_TIMEOUT }}
 
     steps:
       - name: Checkout code
