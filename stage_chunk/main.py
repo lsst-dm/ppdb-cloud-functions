@@ -101,7 +101,9 @@ def stage_chunk(event: CloudEvent) -> None:
         return
 
     try:
-        chunk_id = int(data["chunk_id"])
+        # Converted to a string first, so a float or boolean is rejected
+        # instead of being truncated to an integer.
+        chunk_id = int(str(data["chunk_id"]))
     except (KeyError, ValueError, TypeError) as e:
         # There is no valid chunk ID, so there is no chunk to mark as failed.
         logger.log_event(
