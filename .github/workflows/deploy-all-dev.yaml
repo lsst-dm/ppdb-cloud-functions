@@ -16,7 +16,3 @@ jobs:
   promote-chunks:
     uses: ./.github/workflows/promote-chunks-deploy-dev.yaml
     secrets: inherit
-
-  load-sso-build-flex:
-    uses: ./.github/workflows/load-sso-build-flex-deploy-dev.yaml
-    secrets: inherit
