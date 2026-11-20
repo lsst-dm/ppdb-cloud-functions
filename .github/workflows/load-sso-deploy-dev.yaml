@@ -19,7 +19,6 @@ jobs:
       CPU: ${{ vars.LOAD_SSO_CPU }}
       MEMORY: ${{ vars.LOAD_SSO_MEMORY }}
       TIMEOUT: ${{ vars.LOAD_SSO_TIMEOUT }}
-      MACHINE_TYPE: ${{ vars.LOAD_SSO_MACHINE_TYPE }}
 
     steps:
     - name: Checkout code

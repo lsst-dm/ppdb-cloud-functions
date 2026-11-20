@@ -21,22 +21,19 @@
 
 import logging
 import os
+from datetime import timedelta
 
 import functions_framework
-import google.auth
 from cloudevents.http import CloudEvent
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+from google.cloud import bigquery
+from lsst.dax.ppdb import PpdbConfig
+from lsst.dax.ppdb.bigquery import PpdbBigQueryConfig
+from lsst.dax.ppdb.bigquery.sso import Loader
 from lsst.dax.ppdb.gcp import (
-    CloudEventLogger,
-    DecodeMessageDataError,
     cloud_run_initialize_sentry,
-    decode_message_data,
     flush_sentry,
-    handle_dataflow_launch_error,
     setup_cloud_logging,
 )
-
 
 cloud_run_initialize_sentry()
 
@@ -44,144 +41,53 @@ cloud_run_initialize_sentry()
 setup_cloud_logging()
 _LOG = logging.getLogger("load_sso")
 
-# Read required environment variables.
-PROJECT_ID = os.environ["PROJECT_ID"]
-DATAFLOW_TEMPLATE_PATH = os.environ["DATAFLOW_TEMPLATE_PATH"]
-REGION = os.environ["REGION"]
-SERVICE_ACCOUNT_EMAIL = os.environ["SERVICE_ACCOUNT_EMAIL"]
-TEMP_LOCATION = os.environ["TEMP_LOCATION"]
-GOOGLE_CLOUD_SUBNETWORK = os.environ["GOOGLE_CLOUD_SUBNETWORK"]
-STAGING_DATASET_ID = os.environ["STAGING_DATASET_ID"]
-INTERNAL_DATASET_ID = os.environ["INTERNAL_DATASET_ID"]
-DATAFLOW_MACHINE_TYPE = os.environ["DATAFLOW_MACHINE_TYPE"]
-NUM_RETRIES = int(os.environ["NUM_RETRIES"])
+# The PPDB config gives the project and the landing and internal datasets.
+_config = PpdbConfig.from_uri(os.environ["PPDB_CONFIG_URI"])
+if not isinstance(_config, PpdbBigQueryConfig):
+    raise TypeError(f"PPDB config has wrong type: {type(_config)}")
 
-_credentials, _ = google.auth.default()
-_dataflow_client = build(
-    "dataflow",
-    "v1b3",
-    credentials=_credentials,
-    cache_discovery=False,
+# BigQuery limits for the loader, set by Terraform.
+BIGQUERY_JOB_TIMEOUT_SECONDS = int(os.environ["BIGQUERY_JOB_TIMEOUT_SECONDS"])
+BIGQUERY_RETRY_TIMEOUT_SECONDS = int(os.environ["BIGQUERY_RETRY_TIMEOUT_SECONDS"])
+
+# Created once per instance and shared by all requests, so that the clients
+# are reused.
+_loader = Loader(
+    _config,
+    bigquery.Client(project=_config.project_id),
+    job_timeout=timedelta(seconds=BIGQUERY_JOB_TIMEOUT_SECONDS),
+    retry_timeout=timedelta(seconds=BIGQUERY_RETRY_TIMEOUT_SECONDS),
 )
 
 
 @functions_framework.cloud_event
 @flush_sentry
 def load_sso(event: CloudEvent) -> None:
-    """Cloud Function to launch a Dataflow job to load SSO data."""
-    logger = CloudEventLogger(_LOG, event["id"])
+    """Cloud Function that loads an upload of SSO parquet files into the
+    internal SSO tables.
 
-    try:
-        data = decode_message_data(logger, event)
-    except DecodeMessageDataError:
-        return
+    Parameters
+    ----------
+    event
+        The CloudEvent delivered by the Pub/Sub trigger. The message data
+        should include ``bucket`` and ``object_prefix``, the location of the
+        upload in Cloud Storage.
 
-    try:
-        bucket = data["bucket"]
-        object_prefix = data["object_prefix"]
-        uploaded_tables = data["uploaded_tables"]
-    except KeyError as e:
-        logger.log_event(
-            logging.WARNING,
-            "Missing required key in Pub/Sub message",
-            "missing_key_in_pubsub_message",
-            error=e,
-            missing_keys=[
-                key
-                for key in [
-                    "bucket",
-                    "object_prefix",
-                    "uploaded_tables",
-                ]
-                if key not in data
-            ],
-            pubsub_message=data,
-        )
-        return
+    Notes
+    -----
+    Returning acknowledges the message and raising makes Pub/Sub retry it.
+    `Loader.load_from_event` decodes the message, loads the upload, logs the
+    outcome and publishes the result. Bad messages and every load failure
+    are acknowledged, so a failed load isn't retried.
 
-    logger.log_event(
-        logging.INFO,
-        "Received load SSO request",
-        "load_sso_request_received",
-        gcs_bucket=bucket,
-        gcs_object_prefix=object_prefix,
-        uploaded_tables=uploaded_tables,
-    )
+    Only one load runs at a time, because the function runs on at most one
+    instance, handling one message at a time.
 
-    # A fixed job name is used to ensure that only one Load SSO job may be
-    # active at once. Dataflow will reject launches if a job with the same name
-    # is already running. This is used as a simple concurrency control
-    # mechanism.
-    job_name = "load-sso"
-
-    launch_body = {
-        "launchParameter": {
-            "jobName": job_name,
-            "containerSpecGcsPath": DATAFLOW_TEMPLATE_PATH,
-            "parameters": {
-                "bucket": bucket,
-                "object_prefix": object_prefix,
-                "tables": ",".join(uploaded_tables),
-                "staging_dataset_id": STAGING_DATASET_ID,
-                "internal_dataset_id": INTERNAL_DATASET_ID,
-            },
-            "environment": {
-                "serviceAccountEmail": SERVICE_ACCOUNT_EMAIL,
-                "tempLocation": TEMP_LOCATION,
-                "subnetwork": GOOGLE_CLOUD_SUBNETWORK,
-                "machineType": DATAFLOW_MACHINE_TYPE,
-            },
-        }
-    }
-
-    logger.log_event(
-        logging.INFO,
-        "Launching Dataflow job",
-        "dataflow_job_launching",
-        launch_parameter=launch_body["launchParameter"],
-    )
-
-    try:
-        request = (
-            _dataflow_client.projects()
-            .locations()
-            .flexTemplates()
-            .launch(projectId=PROJECT_ID, location=REGION, body=launch_body)
-        )
-        response = request.execute(num_retries=NUM_RETRIES)
-
-        if "job" not in response:
-            logger.log_event(
-                logging.ERROR,
-                "Dataflow API response missing 'job' field",
-                "dataflow_response_missing_job",
-                dataflow_response=response,
-            )
-            return
-
-        job_id = response.get("job", {}).get("id", "unknown")
-
-        logger.log_event(
-            logging.INFO,
-            "Dataflow job launched successfully",
-            "dataflow_job_launched",
-            dataflow_job_id=job_id,
-            dataflow_job_name=job_name,
-        )
-    except Exception as e:
-        if isinstance(e, HttpError) and e.resp.status == 409:
-            # Dataflow rejects launches while a job with the same name is
-            # already active; this is expected and non-retryable.
-            logger.log_event(
-                logging.INFO,
-                "Dataflow job already active",
-                "dataflow_job_already_active",
-                error=e,
-                http_status=e.resp.status,
-                dataflow_job_name=job_name,
-            )
-            return
-
-        if handle_dataflow_launch_error(logger, e):
-            raise  # Will trigger retry
-        return  # Acknowledge message
+    The result of each load, whether it succeeded or failed, is published to
+    the ``load-sso-result`` topic, where ``ppdb-cli upload-sso-data``
+    waits for it.
+    """
+    # Error handling is internal to the loader. It doesn't raise for a bad
+    # message or a failed load, so the message is acknowledged and will not
+    # be retried.
+    _loader.load_from_event(event, _LOG)
