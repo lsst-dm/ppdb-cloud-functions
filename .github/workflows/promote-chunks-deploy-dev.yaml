@@ -16,12 +16,6 @@ jobs:
       REPOSITORY: ppdb-repo
       IMAGE: promote-chunks
       JOB_NAME: promote-chunks
-      APP_SOURCE_PATH: promote_chunks
-      RUNTIME: 'python313'
-      ENTRY_POINT: 'promote_chunks'
-      CPU: ${{ vars.PROMOTE_CHUNKS_CPU }}
-      MEMORY: ${{ vars.PROMOTE_CHUNKS_MEMORY }}
-      TIMEOUT: ${{ vars.PROMOTE_CHUNKS_TIMEOUT }}
 
     steps:
       - name: Checkout code
