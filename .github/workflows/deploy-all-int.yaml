@@ -13,6 +13,10 @@ jobs:
     uses: ./.github/workflows/load-sso-deploy-int.yaml
     secrets: inherit
 
+  export-diasource-min-ssp:
+    uses: ./.github/workflows/export-diasource-min-ssp-deploy-int.yaml
+    secrets: inherit
+
   promote-chunks:
     uses: ./.github/workflows/promote-chunks-deploy-int.yaml
     secrets: inherit

@@ -1,0 +1,43 @@
+name: Int - Export DiaSource Min SSP Cloud Run Deploy
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: int/export-diasource-min-ssp
+
+    env:
+      PROJECT_ID: ${{ vars.GCP_INT_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      SERVICE_NAME: export-diasource-min-ssp
+      APP_SOURCE_PATH: export_diasource_min_ssp
+      RUNTIME: 'python313'
+      ENTRY_POINT: 'export_diasource_min_ssp'
+      CPU: ${{ vars.EXPORT_DIASOURCE_MIN_SSP_CPU }}
+      MEMORY: ${{ vars.EXPORT_DIASOURCE_MIN_SSP_MEMORY }}
+      TIMEOUT: ${{ vars.EXPORT_DIASOURCE_MIN_SSP_TIMEOUT }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - id: 'auth'
+      name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@v3'
+      with:
+        credentials_json: ${{ secrets.GCP_CREDENTIALS_INT }}
+
+    - name: 'Deploy to Cloud Run Functions'
+      uses: 'google-github-actions/deploy-cloud-functions@v4'
+      with:
+        name: ${{ env.SERVICE_NAME }}
+        region: ${{ env.REGION }}
+        source_dir: ${{ env.APP_SOURCE_PATH }}
+        runtime: ${{ env.RUNTIME }}
+        entry_point: ${{ env.ENTRY_POINT }}
+        cpu: ${{ env.CPU }}
+        memory: ${{ env.MEMORY }}
+        service_timeout: ${{ env.TIMEOUT }}
